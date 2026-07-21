@@ -1,0 +1,17 @@
+---
+source: tui/src/rules_sidebar_tests.rs
+assertion_line: 116
+expression: "render_panel(&mut state, 40, 12)"
+---
+ Rules  2
+
+ 1. Verification boundary
+ Run focused tests before claiming
+ completion, and keep this
+ deliberately long so the sidebar
+ wrapping remains reviewable.
+
+ 2. Failure handling
+ Keep the last successful rules
+ visible when refresh fails.
+ Ctrl+T close

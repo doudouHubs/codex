@@ -1,0 +1,15 @@
+---
+source: tui/src/rules_sidebar_tests.rs
+assertion_line: 98
+expression: "render_panel(&mut empty, 72, 10)"
+---
+ Rules  0
+
+ No rules selected for this session.
+
+
+
+
+
+
+ Ctrl+T close

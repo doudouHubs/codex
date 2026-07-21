@@ -41,6 +41,7 @@ pub use crate::tui_keymap::TuiGlobalKeymap;
 pub use crate::tui_keymap::TuiKeymap;
 pub use crate::tui_keymap::TuiListKeymap;
 pub use crate::tui_keymap::TuiPagerKeymap;
+pub use crate::tui_keymap::TuiRulesSidebarKeymap;
 pub use crate::tui_keymap::TuiVimNormalKeymap;
 pub use crate::tui_keymap::TuiVimOperatorKeymap;
 

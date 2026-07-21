@@ -810,6 +810,9 @@ impl App {
                     "failed to load skills on startup",
                 );
             }
+            AppEvent::RulesSidebarLoaded { generation, result } => {
+                self.handle_rules_sidebar_loaded(tui, generation, result);
+            }
             AppEvent::StartFileSearch(query) => {
                 self.file_search.on_user_query(query);
             }

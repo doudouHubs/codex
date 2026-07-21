@@ -70,6 +70,7 @@ use crate::render::highlight::highlight_bash_to_lines;
 use crate::render::renderable::Renderable;
 use crate::resume_picker::SessionSelection;
 use crate::resume_picker::SessionTarget;
+use crate::rules_sidebar::RulesSidebarState;
 use crate::session_state::ThreadSessionState;
 #[cfg(test)]
 use crate::test_support::PathBufExt;
@@ -217,6 +218,7 @@ mod platform_actions;
 mod plugin_mentions;
 mod replay_filter;
 mod resize_reflow;
+mod rules_sidebar;
 mod safety_buffering;
 mod session_lifecycle;
 mod side;
@@ -526,6 +528,9 @@ pub(crate) struct App {
 
     // Pager overlay state (Transcript or Static like Diff)
     pub(crate) overlay: Option<Overlay>,
+    /// Interactive rules surface; mutually exclusive with `overlay` but non-exclusive for input.
+    rules_sidebar: Option<RulesSidebarState>,
+    rules_sidebar_generation: u64,
     pub(crate) deferred_history_lines: Vec<crate::terminal_hyperlinks::HyperlinkLine>,
     has_emitted_history_lines: bool,
     transcript_reflow: TranscriptReflowState,
@@ -1043,6 +1048,8 @@ See the Codex keymap documentation for supported actions and examples."
             keymap: runtime_keymap,
             transcript_cells: Vec::new(),
             overlay: None,
+            rules_sidebar: None,
+            rules_sidebar_generation: 0,
             deferred_history_lines: Vec::new(),
             has_emitted_history_lines: false,
             transcript_reflow: TranscriptReflowState::default(),
@@ -1283,7 +1290,10 @@ See the Codex keymap documentation for supported actions and examples."
             self.handle_draw_pre_render(tui)?;
         }
 
-        if self.overlay.is_some() {
+        if self.rules_sidebar.is_some() {
+            self.handle_rules_sidebar_tui_event(tui, app_server, event)
+                .await?;
+        } else if self.overlay.is_some() {
             let _ = self.handle_backtrack_overlay_event(tui, event).await?;
         } else {
             match event {

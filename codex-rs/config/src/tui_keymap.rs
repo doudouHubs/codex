@@ -93,6 +93,8 @@ impl KeybindingsSpec {
 pub struct TuiGlobalKeymap {
     /// Open the transcript overlay.
     pub open_transcript: Option<KeybindingsSpec>,
+    /// Toggle the rules sidebar.
+    pub toggle_rules_sidebar: Option<KeybindingsSpec>,
     /// Open the external editor for the current draft.
     pub open_external_editor: Option<KeybindingsSpec>,
     /// Copy the last agent response to the clipboard.
@@ -337,6 +339,27 @@ pub struct TuiPagerKeymap {
     pub close_transcript: Option<KeybindingsSpec>,
 }
 
+/// Rules sidebar keybindings.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, Default, JsonSchema)]
+#[serde(deny_unknown_fields)]
+#[schemars(deny_unknown_fields)]
+pub struct TuiRulesSidebarKeymap {
+    /// Jump the transcript column to the beginning.
+    pub transcript_jump_top: Option<KeybindingsSpec>,
+    /// Jump the transcript column to the end and resume following live output.
+    pub transcript_jump_bottom: Option<KeybindingsSpec>,
+    /// Scroll the rules content up by one row.
+    pub scroll_up: Option<KeybindingsSpec>,
+    /// Scroll the rules content down by one row.
+    pub scroll_down: Option<KeybindingsSpec>,
+    /// Scroll the rules content up by one page.
+    pub page_up: Option<KeybindingsSpec>,
+    /// Scroll the rules content down by one page.
+    pub page_down: Option<KeybindingsSpec>,
+    /// Close the rules sidebar without changing composer focus.
+    pub close: Option<KeybindingsSpec>,
+}
+
 /// List selection context keybindings for popup-style selectable lists.
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, Default, JsonSchema)]
 #[serde(deny_unknown_fields)]
@@ -417,6 +440,8 @@ pub struct TuiKeymap {
     pub vim_text_object: TuiVimTextObjectKeymap,
     #[serde(default)]
     pub pager: TuiPagerKeymap,
+    #[serde(default)]
+    pub rules_sidebar: TuiRulesSidebarKeymap,
     #[serde(default)]
     pub list: TuiListKeymap,
     #[serde(default)]
@@ -650,6 +675,25 @@ mod tests {
         "#;
         let keymap: TuiKeymap = toml::from_str(toml_input).expect("valid config");
         assert!(keymap.global.open_transcript.is_some());
+    }
+
+    #[test]
+    fn rules_sidebar_context_is_accepted() {
+        let toml_input = r#"
+            [global]
+            toggle_rules_sidebar = "ctrl-y"
+
+            [rules_sidebar]
+            transcript_jump_top = "ctrl-home"
+            scroll_up = "alt-up"
+            close = "esc"
+        "#;
+        let keymap: TuiKeymap = toml::from_str(toml_input).expect("valid config");
+
+        assert!(keymap.global.toggle_rules_sidebar.is_some());
+        assert!(keymap.rules_sidebar.transcript_jump_top.is_some());
+        assert!(keymap.rules_sidebar.scroll_up.is_some());
+        assert!(keymap.rules_sidebar.close.is_some());
     }
 
     #[test]

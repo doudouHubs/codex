@@ -9,11 +9,11 @@
 //!
 //! Backtrack operates as a small state machine:
 //! - The first `Esc` in the main view "primes" the feature and captures a base thread id.
-//! - A subsequent `Esc` opens the transcript overlay (`Ctrl+T`) and highlights a user message when
+//! - A subsequent `Esc` opens the transcript overlay (`Ctrl+E`) and highlights a user message when
 //!   there is a prompt to reuse.
 //! - `Enter` requests a fork before the selected prompt and reopens it for editing.
 //!
-//! The transcript overlay (`Ctrl+T`) renders committed transcript cells plus a render-only live
+//! The transcript overlay (`Ctrl+E`) renders committed transcript cells plus a render-only live
 //! tail derived from the current in-flight `ChatWidget.active_cell`.
 //!
 //! That live tail is kept in sync during `TuiEvent::Draw` handling for `Overlay::Transcript` by
@@ -334,7 +334,7 @@ impl App {
     ///
     /// `TranscriptOverlay` owns committed transcript cells, while `ChatWidget` owns the current
     /// in-flight active cell (often a coalesced exec/tool group). During draws we append that
-    /// in-flight cell as a cached, render-only live tail so `Ctrl+T` does not appear to "lose" tool
+    /// in-flight cell as a cached, render-only live tail so `Ctrl+E` does not appear to "lose" tool
     /// calls until a later flush boundary.
     ///
     /// This logic lives here (instead of inside the overlay widget) because `ChatWidget` is the

@@ -157,6 +157,13 @@ impl ChatWidget {
         self.set_skills(Some(enabled_skills_for_mentions(&self.skills_all)));
     }
 
+    pub(crate) fn rule_system_list_skill_path(&self) -> Option<&std::path::Path> {
+        self.skills_all
+            .iter()
+            .find(|skill| skill.enabled && skill.name == "rule-system:rule-list")
+            .map(|skill| skill.path.as_path())
+    }
+
     pub(crate) fn annotate_skill_reads_in_parsed_cmd(
         &self,
         mut parsed_cmd: Vec<ParsedCommand>,

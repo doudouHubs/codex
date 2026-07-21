@@ -1857,7 +1857,8 @@ async fn slash_keymap_debug_can_inspect_app_shortcuts() {
     chat.dispatch_command_with_args(SlashCommand::Keymap, "debug".to_string(), Vec::new());
 
     for (key, expected_action) in [
-        ('t', "global.open_transcript (Open Transcript)"),
+        ('e', "global.open_transcript (Open Transcript)"),
+        ('t', "global.toggle_rules_sidebar (Toggle Rules Sidebar)"),
         ('l', "global.clear_terminal (Clear Terminal)"),
         ('g', "global.open_external_editor (Open External Editor)"),
     ] {

@@ -5,7 +5,7 @@
 //!
 //! The UI has both committed transcript cells (finalized `HistoryCell`s) and an in-flight active
 //! cell (`ChatWidget.active_cell`) that can mutate in place while streaming (often representing a
-//! coalesced exec/tool group). The transcript overlay (`Ctrl+T`) renders committed cells plus a
+//! coalesced exec/tool group). The transcript overlay (`Ctrl+E`) renders committed cells plus a
 //! cached, render-only live tail derived from the current active cell so in-flight tool calls are
 //! visible immediately.
 //!
@@ -1831,7 +1831,7 @@ impl ChatWidget {
 
     /// Returns a cache key describing the current in-flight cells for the transcript overlay.
     ///
-    /// `Ctrl+T` renders committed transcript cells plus a render-only live tail derived from the
+    /// `Ctrl+E` renders committed transcript cells plus a render-only live tail derived from the
     /// current active, hook, and asynchronous usage cells, and the overlay caches that tail; this
     /// key is what it uses to decide whether it must recompute. When there are no live cells, this
     /// returns `None` so the overlay can drop the tail entirely.

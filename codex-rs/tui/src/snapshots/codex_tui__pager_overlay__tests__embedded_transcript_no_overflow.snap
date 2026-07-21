@@ -1,0 +1,11 @@
+---
+source: tui/src/pager_overlay.rs
+expression: "embedded_transcript_snapshot(&mut overlay, Rect::new(0, 0, 16, 6))"
+---
+line-00
+
+line-01
+~
+~
+~
+

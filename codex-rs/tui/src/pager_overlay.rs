@@ -1,7 +1,7 @@
 //! Overlay UIs rendered in an alternate screen.
 //!
 //! This module implements the pager-style overlays used by the TUI, including the transcript
-//! overlay (`Ctrl+T`) that renders a full history view separate from the main viewport.
+//! overlay (`Ctrl+E`) that renders a full history view separate from the main viewport.
 //!
 //! The transcript overlay renders committed transcript cells plus an optional render-only live tail
 //! derived from the current in-flight active cell. Because rebuilding wrapped `Line`s on every draw
@@ -17,6 +17,26 @@
 
 use std::io::Result;
 use std::sync::Arc;
+
+use crossterm::event::KeyCode;
+use crossterm::event::KeyEvent;
+use ratatui::buffer::Buffer;
+use ratatui::buffer::Cell;
+use ratatui::layout::Rect;
+use ratatui::style::Style;
+use ratatui::style::Stylize;
+use ratatui::text::Line;
+use ratatui::text::Span;
+use ratatui::text::Text;
+use ratatui::widgets::Clear;
+use ratatui::widgets::Paragraph;
+use ratatui::widgets::Scrollbar;
+use ratatui::widgets::ScrollbarOrientation;
+use ratatui::widgets::ScrollbarState;
+use ratatui::widgets::StatefulWidget;
+use ratatui::widgets::Widget;
+use ratatui::widgets::WidgetRef;
+use ratatui::widgets::Wrap;
 
 use crate::chatwidget::ActiveCellTranscriptKey;
 use crate::history_cell::HistoryCell;
@@ -34,21 +54,18 @@ use crate::terminal_hyperlinks::mark_buffer_hyperlinks;
 use crate::terminal_hyperlinks::visible_lines;
 use crate::tui;
 use crate::tui::TuiEvent;
-use crossterm::event::KeyCode;
-use crossterm::event::KeyEvent;
-use ratatui::buffer::Buffer;
-use ratatui::buffer::Cell;
-use ratatui::layout::Rect;
-use ratatui::style::Style;
-use ratatui::style::Stylize;
-use ratatui::text::Line;
-use ratatui::text::Span;
-use ratatui::text::Text;
-use ratatui::widgets::Clear;
-use ratatui::widgets::Paragraph;
-use ratatui::widgets::Widget;
-use ratatui::widgets::WidgetRef;
-use ratatui::widgets::Wrap;
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum ScrollDirection {
+    Up,
+    Down,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum ScrollDestination {
+    Top,
+    Bottom,
+}
 
 pub(crate) enum Overlay {
     Transcript(TranscriptOverlay),
@@ -157,21 +174,50 @@ impl PagerView {
         Clear.render(area, buf);
         self.render_header(area, buf);
         let content_area = self.content_area(area);
+        let content_height = self.prepare_content(content_area);
+        self.render_content(content_area, buf);
+        self.render_bottom_bar(area, content_area, buf, content_height);
+    }
+
+    /// Render the pager inside another surface without standalone overlay chrome.
+    fn render_embedded(&mut self, area: Rect, buf: &mut Buffer) {
+        Clear.render(area, buf);
+        if area.is_empty() {
+            return;
+        }
+
+        // 始终保留滚动条列，避免内容由“不溢出”变为“溢出”时触发整栏重新换行。
+        let content_area = Rect::new(area.x, area.y, area.width.saturating_sub(1), area.height);
+        let content_height = self.prepare_content(content_area);
+        self.render_content(content_area, buf);
+
+        if content_height > usize::from(content_area.height) {
+            let scrollbar_area = Rect::new(content_area.right(), area.y, 1, area.height);
+            let mut scrollbar_state = ScrollbarState::new(content_height)
+                .position(self.scroll_offset)
+                .viewport_content_length(usize::from(content_area.height));
+            Scrollbar::new(ScrollbarOrientation::VerticalRight)
+                .thumb_symbol("┃")
+                .track_symbol(Some("│"))
+                .track_style(Style::default().dim())
+                .begin_symbol(None)
+                .end_symbol(None)
+                .render(scrollbar_area, buf, &mut scrollbar_state);
+        }
+    }
+
+    fn prepare_content(&mut self, content_area: Rect) -> usize {
         self.update_last_content_height(content_area.height);
         let content_height = self.content_height(content_area.width);
         self.last_rendered_height = Some(content_height);
-        // If there is a pending request to scroll a specific chunk into view,
-        // satisfy it now that wrapping is up to date for this width.
+        // 宽度变化会改变换行结果，必须等本轮布局确定后再计算目标 chunk 的可见位置。
         if let Some(idx) = self.pending_scroll_chunk.take() {
             self.ensure_chunk_visible(idx, content_area);
         }
         self.scroll_offset = self
             .scroll_offset
             .min(content_height.saturating_sub(content_area.height as usize));
-
-        self.render_content(content_area, buf);
-
-        self.render_bottom_bar(area, content_area, buf, content_height);
+        content_height
     }
 
     fn render_header(&self, area: Rect, buf: &mut Buffer) {
@@ -253,10 +299,10 @@ impl PagerView {
     fn handle_key_event(&mut self, tui: &mut tui::Tui, key_event: KeyEvent) -> Result<()> {
         match key_event {
             e if self.keymap.scroll_up.is_pressed(e) => {
-                self.scroll_offset = self.scroll_offset.saturating_sub(1);
+                self.scroll_line(ScrollDirection::Up);
             }
             e if self.keymap.scroll_down.is_pressed(e) => {
-                self.scroll_offset = self.scroll_offset.saturating_add(1);
+                self.scroll_line(ScrollDirection::Down);
             }
             e if self.keymap.page_up.is_pressed(e) => {
                 let page_height = self.page_height(tui.terminal.viewport_area);
@@ -277,10 +323,10 @@ impl PagerView {
                 self.scroll_offset = self.scroll_offset.saturating_sub(half_page);
             }
             e if self.keymap.jump_top.is_pressed(e) => {
-                self.scroll_offset = 0;
+                self.scroll_to(ScrollDestination::Top);
             }
             e if self.keymap.jump_bottom.is_pressed(e) => {
-                self.scroll_offset = usize::MAX;
+                self.scroll_to(ScrollDestination::Bottom);
             }
             _ => {
                 return Ok(());
@@ -289,6 +335,21 @@ impl PagerView {
         tui.frame_requester()
             .schedule_frame_in(crate::tui::TARGET_FRAME_INTERVAL);
         Ok(())
+    }
+
+    fn scroll_line(&mut self, direction: ScrollDirection) {
+        self.scroll_offset = match direction {
+            ScrollDirection::Up => self.scroll_offset.saturating_sub(1),
+            ScrollDirection::Down => self.scroll_offset.saturating_add(1),
+        };
+    }
+
+    fn scroll_to(&mut self, destination: ScrollDestination) {
+        self.scroll_offset = match destination {
+            ScrollDestination::Top => 0,
+            // MAX 会在下一次渲染时钳制到真实底部，并保留后续实时内容的跟随语义。
+            ScrollDestination::Bottom => usize::MAX,
+        };
     }
 
     /// Returns the height of one page in content rows.
@@ -579,10 +640,20 @@ impl TranscriptOverlay {
         }
     }
 
+    /// 侧栏每帧只做指针序列比较；内容未变时不重建已缓存的 transcript renderables。
+    pub(crate) fn cells_match(&self, cells: &[Arc<dyn HistoryCell>]) -> bool {
+        self.cells.len() == cells.len()
+            && self
+                .cells
+                .iter()
+                .zip(cells)
+                .all(|(left, right)| Arc::ptr_eq(left, right))
+    }
+
     /// Replace a range of committed cells with a single consolidated cell.
     ///
     /// Mirrors the splice performed on `App::transcript_cells` during
-    /// `ConsolidateAgentMessage` so the Ctrl+T overlay stays in sync with the
+    /// `ConsolidateAgentMessage` so the Ctrl+E overlay stays in sync with the
     /// main transcript. The range is clamped defensively: cells may have been
     /// inserted after the overlay opened, leaving it with fewer entries than
     /// the main transcript.
@@ -633,7 +704,7 @@ impl TranscriptOverlay {
     /// mutates or animates so the cached tail stays fresh.
     ///
     /// Passing a key that does not change on in-place active-cell mutations will freeze the tail in
-    /// `Ctrl+T` while the main viewport continues to update.
+    /// `Ctrl+E` while the main viewport continues to update.
     pub(crate) fn sync_live_tail(
         &mut self,
         width: u16,
@@ -684,6 +755,14 @@ impl TranscriptOverlay {
     /// tail; if the user has scrolled up, we avoid driving animation work that they cannot see.
     pub(crate) fn is_scrolled_to_bottom(&self) -> bool {
         self.view.is_scrolled_to_bottom()
+    }
+
+    pub(crate) fn scroll_line(&mut self, direction: ScrollDirection) {
+        self.view.scroll_line(direction);
+    }
+
+    pub(crate) fn scroll_to(&mut self, destination: ScrollDestination) {
+        self.view.scroll_to(destination);
     }
 
     fn rebuild_renderables(&mut self) {
@@ -776,6 +855,11 @@ impl TranscriptOverlay {
         let bottom = Rect::new(area.x, area.y + top_h, area.width, 3);
         self.view.render(top, buf);
         self.render_hints(bottom, buf);
+    }
+
+    /// Render only the transcript pager, leaving the caller to compose its own input pane.
+    pub(crate) fn render_timeline(&mut self, area: Rect, buf: &mut Buffer) {
+        self.view.render_embedded(area, buf);
     }
 }
 
@@ -1060,6 +1144,62 @@ mod tests {
         term.draw(|f| overlay.render(f.area(), f.buffer_mut()))
             .expect("draw");
         assert_snapshot!(term.backend());
+    }
+
+    fn embedded_transcript_snapshot(overlay: &mut TranscriptOverlay, area: Rect) -> String {
+        let mut buffer = Buffer::empty(area);
+        overlay.render_timeline(area, &mut buffer);
+        buffer_to_text(&buffer, area)
+    }
+
+    #[test]
+    fn embedded_transcript_without_overflow_has_no_chrome_or_scrollbar() {
+        let mut overlay = transcript_overlay(
+            (0..2)
+                .map(|i| {
+                    Arc::new(TestCell {
+                        lines: vec![Line::from(format!("line-{i:02}"))],
+                    }) as Arc<dyn HistoryCell>
+                })
+                .collect(),
+        );
+
+        insta::assert_snapshot!(
+            "embedded_transcript_no_overflow",
+            embedded_transcript_snapshot(&mut overlay, Rect::new(0, 0, 16, 6))
+        );
+    }
+
+    #[test]
+    fn embedded_transcript_scrollbar_tracks_top_middle_and_bottom() {
+        let mut overlay = transcript_overlay(
+            (0..8)
+                .map(|i| {
+                    Arc::new(TestCell {
+                        lines: vec![Line::from(format!("line-{i:02}"))],
+                    }) as Arc<dyn HistoryCell>
+                })
+                .collect(),
+        );
+        let area = Rect::new(0, 0, 16, 6);
+
+        overlay.scroll_to(ScrollDestination::Top);
+        insta::assert_snapshot!(
+            "embedded_transcript_scrollbar_top",
+            embedded_transcript_snapshot(&mut overlay, area)
+        );
+
+        overlay.view.scroll_offset = 4;
+        insta::assert_snapshot!(
+            "embedded_transcript_scrollbar_middle",
+            embedded_transcript_snapshot(&mut overlay, area)
+        );
+
+        overlay.scroll_to(ScrollDestination::Bottom);
+        insta::assert_snapshot!(
+            "embedded_transcript_scrollbar_bottom",
+            embedded_transcript_snapshot(&mut overlay, area)
+        );
     }
 
     #[test]

@@ -542,7 +542,7 @@ impl ChatComposer {
                 side_conversation_context_label: None,
                 active_agent_label: None,
                 external_editor_key: Some(key_hint::ctrl(KeyCode::Char('g'))),
-                show_transcript_key: Some(key_hint::ctrl(KeyCode::Char('t'))),
+                show_transcript_key: Some(key_hint::ctrl(KeyCode::Char('e'))),
                 insert_newline_key: footer_insert_newline_key(
                     &default_keymap.editor.insert_newline,
                     use_shift_enter_hint,

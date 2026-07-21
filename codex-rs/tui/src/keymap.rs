@@ -50,6 +50,7 @@ pub(crate) struct RuntimeKeymap {
     pub(crate) vim_operator: VimOperatorKeymap,
     pub(crate) vim_text_object: VimTextObjectKeymap,
     pub(crate) pager: PagerKeymap,
+    pub(crate) rules_sidebar: RulesSidebarKeymap,
     pub(crate) list: ListKeymap,
     pub(crate) approval: ApprovalKeymap,
 }
@@ -58,6 +59,8 @@ pub(crate) struct RuntimeKeymap {
 pub(crate) struct AppKeymap {
     /// Open transcript overlay.
     pub(crate) open_transcript: Vec<KeyBinding>,
+    /// Toggle the rules sidebar without changing composer focus.
+    pub(crate) toggle_rules_sidebar: Vec<KeyBinding>,
     /// Open external editor for the current draft.
     pub(crate) open_external_editor: Vec<KeyBinding>,
     /// Copy the last agent response to the clipboard.
@@ -222,6 +225,19 @@ pub(crate) struct PagerKeymap {
     pub(crate) jump_bottom: Vec<KeyBinding>,
     pub(crate) close: Vec<KeyBinding>,
     pub(crate) close_transcript: Vec<KeyBinding>,
+}
+
+/// Rules sidebar keybindings use modifiers by default so the composer remains
+/// the active text input while the sidebar is visible.
+#[derive(Clone, Debug)]
+pub(crate) struct RulesSidebarKeymap {
+    pub(crate) transcript_jump_top: Vec<KeyBinding>,
+    pub(crate) transcript_jump_bottom: Vec<KeyBinding>,
+    pub(crate) scroll_up: Vec<KeyBinding>,
+    pub(crate) scroll_down: Vec<KeyBinding>,
+    pub(crate) page_up: Vec<KeyBinding>,
+    pub(crate) page_down: Vec<KeyBinding>,
+    pub(crate) close: Vec<KeyBinding>,
 }
 
 /// Generic list picker keybindings shared across popup list views.
@@ -391,6 +407,11 @@ impl RuntimeKeymap {
                 keymap.global.open_transcript.as_ref(),
                 &defaults.app.open_transcript,
                 "tui.keymap.global.open_transcript",
+            )?,
+            toggle_rules_sidebar: resolve_bindings(
+                keymap.global.toggle_rules_sidebar.as_ref(),
+                &defaults.app.toggle_rules_sidebar,
+                "tui.keymap.global.toggle_rules_sidebar",
             )?,
             open_external_editor: resolve_bindings(
                 keymap.global.open_external_editor.as_ref(),
@@ -768,6 +789,26 @@ impl RuntimeKeymap {
             close_transcript: resolve_local!(keymap, defaults, pager, close_transcript),
         };
 
+        let rules_sidebar = RulesSidebarKeymap {
+            transcript_jump_top: resolve_local!(
+                keymap,
+                defaults,
+                rules_sidebar,
+                transcript_jump_top
+            ),
+            transcript_jump_bottom: resolve_local!(
+                keymap,
+                defaults,
+                rules_sidebar,
+                transcript_jump_bottom
+            ),
+            scroll_up: resolve_local!(keymap, defaults, rules_sidebar, scroll_up),
+            scroll_down: resolve_local!(keymap, defaults, rules_sidebar, scroll_down),
+            page_up: resolve_local!(keymap, defaults, rules_sidebar, page_up),
+            page_down: resolve_local!(keymap, defaults, rules_sidebar, page_down),
+            close: resolve_local!(keymap, defaults, rules_sidebar, close),
+        };
+
         let approval = ApprovalKeymap {
             open_fullscreen: resolve_local!(keymap, defaults, approval, open_fullscreen),
             open_thread: resolve_local!(keymap, defaults, approval, open_thread),
@@ -787,6 +828,10 @@ impl RuntimeKeymap {
             (
                 keymap.global.open_transcript.as_ref(),
                 app.open_transcript.as_slice(),
+            ),
+            (
+                keymap.global.toggle_rules_sidebar.as_ref(),
+                app.toggle_rules_sidebar.as_slice(),
             ),
             (
                 keymap.global.open_external_editor.as_ref(),
@@ -893,6 +938,7 @@ impl RuntimeKeymap {
             vim_operator,
             vim_text_object,
             pager,
+            rules_sidebar,
             list,
             approval,
         };
@@ -909,7 +955,8 @@ impl RuntimeKeymap {
     fn built_in_defaults() -> Self {
         Self {
             app: AppKeymap {
-                open_transcript: default_bindings![ctrl(KeyCode::Char('t'))],
+                open_transcript: default_bindings![ctrl(KeyCode::Char('e'))],
+                toggle_rules_sidebar: default_bindings![ctrl(KeyCode::Char('t'))],
                 open_external_editor: default_bindings![ctrl(KeyCode::Char('g'))],
                 copy: default_bindings![ctrl(KeyCode::Char('o'))],
                 clear_terminal: default_bindings![ctrl(KeyCode::Char('l'))],
@@ -962,7 +1009,8 @@ impl RuntimeKeymap {
                     raw(KeyBinding::new(KeyCode::Right, KeyModifiers::CONTROL))
                 ],
                 move_line_start: default_bindings![plain(KeyCode::Home), ctrl(KeyCode::Char('a'))],
-                move_line_end: default_bindings![plain(KeyCode::End), ctrl(KeyCode::Char('e'))],
+                // Ctrl+E 现在负责 transcript；保留 End，避免一个默认键同时被外层和编辑器消费。
+                move_line_end: default_bindings![plain(KeyCode::End)],
                 delete_backward: default_bindings![
                     plain(KeyCode::Backspace),
                     shift(KeyCode::Backspace),
@@ -1109,7 +1157,17 @@ impl RuntimeKeymap {
                 jump_top: default_bindings![plain(KeyCode::Home)],
                 jump_bottom: default_bindings![plain(KeyCode::End)],
                 close: default_bindings![plain(KeyCode::Char('q')), ctrl(KeyCode::Char('c'))],
-                close_transcript: default_bindings![ctrl(KeyCode::Char('t'))],
+                close_transcript: default_bindings![ctrl(KeyCode::Char('e'))],
+            },
+            rules_sidebar: RulesSidebarKeymap {
+                transcript_jump_top: default_bindings![ctrl(KeyCode::Home)],
+                transcript_jump_bottom: default_bindings![ctrl(KeyCode::End)],
+                scroll_up: default_bindings![alt(KeyCode::Up)],
+                scroll_down: default_bindings![alt(KeyCode::Down)],
+                page_up: default_bindings![alt(KeyCode::PageUp)],
+                page_down: default_bindings![alt(KeyCode::PageDown)],
+                // Ctrl+T 始终由全局 toggle 处理；Esc 是侧栏上下文里的快速关闭键。
+                close: default_bindings![plain(KeyCode::Esc)],
             },
             list: ListKeymap {
                 move_up: default_bindings![
@@ -1166,6 +1224,10 @@ impl RuntimeKeymap {
             "app",
             [
                 ("open_transcript", self.app.open_transcript.as_slice()),
+                (
+                    "toggle_rules_sidebar",
+                    self.app.toggle_rules_sidebar.as_slice(),
+                ),
                 (
                     "open_external_editor",
                     self.app.open_external_editor.as_slice(),
@@ -1576,6 +1638,25 @@ impl RuntimeKeymap {
                 ("jump_bottom", self.pager.jump_bottom.as_slice()),
                 ("close", self.pager.close.as_slice()),
                 ("close_transcript", self.pager.close_transcript.as_slice()),
+            ],
+        )?;
+
+        validate_unique(
+            "rules_sidebar",
+            [
+                (
+                    "transcript_jump_top",
+                    self.rules_sidebar.transcript_jump_top.as_slice(),
+                ),
+                (
+                    "transcript_jump_bottom",
+                    self.rules_sidebar.transcript_jump_bottom.as_slice(),
+                ),
+                ("scroll_up", self.rules_sidebar.scroll_up.as_slice()),
+                ("scroll_down", self.rules_sidebar.scroll_down.as_slice()),
+                ("page_up", self.rules_sidebar.page_up.as_slice()),
+                ("page_down", self.rules_sidebar.page_down.as_slice()),
+                ("close", self.rules_sidebar.close.as_slice()),
             ],
         )?;
 
@@ -2049,12 +2130,22 @@ mod tests {
     #[test]
     fn rejects_shadowing_composer_binding_in_app_scope() {
         let mut keymap = TuiKeymap::default();
-        keymap.global.open_transcript = Some(one("ctrl-t"));
-        keymap.composer.submit = Some(one("ctrl-t"));
+        // 使用未被其他默认动作占用的键，确保该测试只验证 transcript 与 composer 的冲突。
+        keymap.global.open_transcript = Some(one("ctrl-y"));
+        keymap.composer.submit = Some(one("ctrl-y"));
 
         let err = RuntimeKeymap::from_config(&keymap).expect_err("expected shadowing conflict");
         assert!(err.contains("composer.submit"));
         assert!(err.contains("open_transcript"));
+    }
+
+    #[test]
+    fn rejects_rules_sidebar_toggle_that_shadows_composer() {
+        let mut keymap = TuiKeymap::default();
+        keymap.global.toggle_rules_sidebar = Some(one("ctrl-y"));
+        keymap.composer.submit = Some(one("ctrl-y"));
+
+        expect_conflict(&keymap, "toggle_rules_sidebar", "composer.submit");
     }
 
     #[test]
@@ -2815,6 +2906,40 @@ mod tests {
         assert_eq!(
             runtime.app.toggle_raw_output,
             vec![key_hint::alt(KeyCode::Char('r'))]
+        );
+    }
+
+    #[test]
+    fn transcript_and_rules_sidebar_have_distinct_defaults() {
+        let runtime = RuntimeKeymap::defaults();
+
+        assert_eq!(
+            runtime.app.open_transcript,
+            vec![key_hint::ctrl(KeyCode::Char('e'))]
+        );
+        assert_eq!(
+            runtime.pager.close_transcript,
+            vec![key_hint::ctrl(KeyCode::Char('e'))]
+        );
+        assert_eq!(
+            runtime.app.toggle_rules_sidebar,
+            vec![key_hint::ctrl(KeyCode::Char('t'))]
+        );
+        assert_eq!(
+            runtime.rules_sidebar.scroll_up,
+            vec![key_hint::alt(KeyCode::Up)]
+        );
+        assert_eq!(
+            runtime.rules_sidebar.transcript_jump_top,
+            vec![key_hint::ctrl(KeyCode::Home)]
+        );
+        assert_eq!(
+            runtime.rules_sidebar.transcript_jump_bottom,
+            vec![key_hint::ctrl(KeyCode::End)]
+        );
+        assert_eq!(
+            runtime.editor.move_line_end,
+            vec![key_hint::plain(KeyCode::End)]
         );
     }
 

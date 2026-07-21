@@ -2,7 +2,8 @@
 source: tui/src/keymap_setup.rs
 expression: snapshot
 ---
-Open Transcript | ctrl-t | Global open_transcript Open Transcript Open the transcript overlay. ctrl-t Default
+Open Transcript | ctrl-e | Global open_transcript Open Transcript Open the transcript overlay. ctrl-e Default
+Toggle Rules Sidebar | ctrl-t | Global toggle_rules_sidebar Toggle Rules Sidebar Show or hide the rules sidebar. ctrl-t Default
 Open External Editor | ctrl-g | Global open_external_editor Open External Editor Open the current draft in an external editor. ctrl-g Default
 Copy | ctrl-o | Global copy Copy Copy the last agent response to the clipboard. ctrl-o Default
 Clear Terminal | ctrl-l | Global clear_terminal Clear Terminal Clear the terminal UI. ctrl-l Default
@@ -13,4 +14,3 @@ Decrease Reasoning Effort | alt-,, shift-down | Chat decrease_reasoning_effort D
 Increase Reasoning Effort | alt-., shift-up | Chat increase_reasoning_effort Increase Reasoning Effort Increase reasoning effort. alt-., shift-up Default
 Edit Queued Message | alt-up, shift-left | Chat edit_queued_message Edit Queued Message Edit the most recently queued message. alt-up, shift-left Default
 Submit | enter | Composer submit Submit Submit the current composer draft. enter Default
-Queue | tab | Composer queue Queue Queue the draft while a task is running. tab Default

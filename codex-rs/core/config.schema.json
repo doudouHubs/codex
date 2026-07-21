@@ -3136,6 +3136,7 @@
               "submit": null,
               "toggle_fast_mode": null,
               "toggle_raw_output": null,
+              "toggle_rules_sidebar": null,
               "toggle_shortcuts": null,
               "toggle_vim_mode": null
             },
@@ -3162,6 +3163,15 @@
               "page_up": null,
               "scroll_down": null,
               "scroll_up": null
+            },
+            "rules_sidebar": {
+              "close": null,
+              "page_down": null,
+              "page_up": null,
+              "scroll_down": null,
+              "scroll_up": null,
+              "transcript_jump_bottom": null,
+              "transcript_jump_top": null
             },
             "vim_normal": {
               "append_after_cursor": null,
@@ -3698,6 +3708,14 @@
           ],
           "description": "Toggle raw scrollback mode for copy-friendly transcript selection."
         },
+        "toggle_rules_sidebar": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/KeybindingsSpec"
+            }
+          ],
+          "description": "Toggle the rules sidebar."
+        },
         "toggle_shortcuts": {
           "allOf": [
             {
@@ -3806,6 +3824,7 @@
             "submit": null,
             "toggle_fast_mode": null,
             "toggle_raw_output": null,
+            "toggle_rules_sidebar": null,
             "toggle_shortcuts": null,
             "toggle_vim_mode": null
           }
@@ -3846,6 +3865,22 @@
             "page_up": null,
             "scroll_down": null,
             "scroll_up": null
+          }
+        },
+        "rules_sidebar": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/TuiRulesSidebarKeymap"
+            }
+          ],
+          "default": {
+            "close": null,
+            "page_down": null,
+            "page_up": null,
+            "scroll_down": null,
+            "scroll_up": null,
+            "transcript_jump_bottom": null,
+            "transcript_jump_top": null
           }
         },
         "vim_normal": {
@@ -4117,6 +4152,69 @@
           "type": "string"
         }
       ]
+    },
+    "TuiRulesSidebarKeymap": {
+      "additionalProperties": false,
+      "description": "Rules sidebar keybindings.",
+      "properties": {
+        "close": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/KeybindingsSpec"
+            }
+          ],
+          "description": "Close the rules sidebar without changing composer focus."
+        },
+        "page_down": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/KeybindingsSpec"
+            }
+          ],
+          "description": "Scroll the rules content down by one page."
+        },
+        "page_up": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/KeybindingsSpec"
+            }
+          ],
+          "description": "Scroll the rules content up by one page."
+        },
+        "scroll_down": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/KeybindingsSpec"
+            }
+          ],
+          "description": "Scroll the rules content down by one row."
+        },
+        "scroll_up": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/KeybindingsSpec"
+            }
+          ],
+          "description": "Scroll the rules content up by one row."
+        },
+        "transcript_jump_bottom": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/KeybindingsSpec"
+            }
+          ],
+          "description": "Jump the transcript column to the end and resume following live output."
+        },
+        "transcript_jump_top": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/KeybindingsSpec"
+            }
+          ],
+          "description": "Jump the transcript column to the beginning."
+        }
+      },
+      "type": "object"
     },
     "TuiVimNormalKeymap": {
       "additionalProperties": false,

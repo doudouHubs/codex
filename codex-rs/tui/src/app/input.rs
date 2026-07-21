@@ -101,7 +101,7 @@ impl App {
         // editing behavior for moving across words inside a draft.
         let allow_agent_word_motion_fallback = !self.enhanced_keys_supported
             && self.chat_widget.composer_text_with_pending().is_empty();
-        if self.overlay.is_none()
+        if !self.fullscreen_surface_active()
             && self.chat_widget.no_modal_or_popup_active()
             // Alt+Left/Right are also natural word-motion keys in the composer. Keep agent
             // fast-switch available only once the draft is empty so editing behavior wins whenever
@@ -119,7 +119,7 @@ impl App {
             }
             return;
         }
-        if self.overlay.is_none()
+        if !self.fullscreen_surface_active()
             && self.chat_widget.no_modal_or_popup_active()
             // Mirror the previous-agent rule above: empty drafts may use these keys for thread
             // switching, but non-empty drafts keep them for expected word-wise cursor motion.
@@ -164,6 +164,13 @@ impl App {
             return;
         }
 
+        if app_keymap_shortcuts_available
+            && self.keymap.app.toggle_rules_sidebar.is_pressed(key_event)
+        {
+            self.open_rules_sidebar(tui);
+            return;
+        }
+
         if app_keymap_shortcuts_available && self.keymap.app.open_transcript.is_pressed(key_event) {
             // Enter alternate screen and set viewport to full size.
             let _ = tui.enter_alt_screen();
@@ -180,7 +187,7 @@ impl App {
         {
             // Only launch the external editor if there is no overlay and the bottom pane is not in use.
             // Note that it can be launched while a task is running to enable editing while the previous turn is ongoing.
-            if self.overlay.is_none()
+            if !self.fullscreen_surface_active()
                 && self.chat_widget.can_launch_external_editor()
                 && self.chat_widget.external_editor_state() == ExternalEditorState::Closed
             {
@@ -276,7 +283,7 @@ impl App {
     }
 
     fn app_keymap_shortcuts_available(&self) -> bool {
-        self.overlay.is_none() && self.chat_widget.no_modal_or_popup_active()
+        !self.fullscreen_surface_active() && self.chat_widget.no_modal_or_popup_active()
     }
 
     pub(super) fn refresh_status_line(&mut self) {

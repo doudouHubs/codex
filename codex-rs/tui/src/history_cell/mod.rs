@@ -4,7 +4,7 @@
 //! transcript entries and, transiently, an in-flight active cell that can mutate in place while
 //! streaming.
 //!
-//! The transcript overlay (`Ctrl+T`) appends a cached live tail derived from the active cell, and
+//! The transcript overlay (`Ctrl+E`) appends a cached live tail derived from the active cell, and
 //! that cached tail is refreshed based on an active-cell cache key. Cells that change based on
 //! elapsed time expose `transcript_animation_tick()`, and code that mutates the active cell in place
 //! bumps the active-cell revision tracked by `ChatWidget`, so the cache key changes whenever the
@@ -235,7 +235,7 @@ pub(crate) trait HistoryCell: std::fmt::Debug + Send + Sync + Any {
             .unwrap_or(0)
     }
 
-    /// Returns lines for the transcript overlay (`Ctrl+T`).
+    /// Returns lines for the transcript overlay (`Ctrl+E`).
     ///
     /// Defaults to `display_lines`. Override when the transcript
     /// representation differs (e.g. `ExecCell` shows all calls with
@@ -290,7 +290,7 @@ pub(crate) trait HistoryCell: std::fmt::Debug + Send + Sync + Any {
     /// transcript lines are stable, while returning `Some(tick)` during an in-flight animation
     /// allows the overlay to keep up with the main viewport.
     ///
-    /// If a cell uses time-based visuals but always returns `None`, `Ctrl+T` can appear "frozen" on
+    /// If a cell uses time-based visuals but always returns `None`, `Ctrl+E` can appear "frozen" on
     /// the first rendered frame even though the main viewport is animating.
     fn transcript_animation_tick(&self) -> Option<u64> {
         None

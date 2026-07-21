@@ -1,0 +1,30 @@
+version: '3'
+
+tasks:
+  dev:
+    desc: Run the Codex TUI from source
+    dir: codex-rs
+    cmds:
+      - just codex {{.CLI_ARGS}}
+
+  build:
+    desc: Build the Codex CLI release binary
+    dir: codex-rs
+    cmds:
+      - cargo build --release --bin codex {{.CLI_ARGS}}
+
+  build-package:
+    desc: Build the canonical Codex package directory and ZIP archive
+    cmds:
+      - >-
+        python scripts/build_codex_package.py
+        --cargo-profile release
+        --package-dir dist/codex-package
+        --archive-output dist/codex-package.zip
+        --force
+        {{.CLI_ARGS}}
+
+  build-i:
+    desc: Alias for build-package
+    cmds:
+      - task: build-package

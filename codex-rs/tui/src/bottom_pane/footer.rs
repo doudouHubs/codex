@@ -130,7 +130,7 @@ impl FooterKeyHints {
             insert_newline: Some(key_hint::ctrl(KeyCode::Char('j'))),
             external_editor: Some(key_hint::ctrl(KeyCode::Char('g'))),
             edit_previous: Some(key_hint::plain(KeyCode::Esc)),
-            show_transcript: Some(key_hint::ctrl(KeyCode::Char('t'))),
+            show_transcript: Some(key_hint::ctrl(KeyCode::Char('e'))),
             history_search: Some(key_hint::ctrl(KeyCode::Char('r'))),
             reasoning_down: Some(key_hint::alt(KeyCode::Char(','))),
             reasoning_up: Some(key_hint::alt(KeyCode::Char('.'))),
@@ -1240,7 +1240,7 @@ const SHORTCUTS: &[ShortcutDescriptor] = &[
     ShortcutDescriptor {
         id: ShortcutId::ShowTranscript,
         bindings: &[ShortcutBinding {
-            key: key_hint::ctrl(KeyCode::Char('t')),
+            key: key_hint::ctrl(KeyCode::Char('e')),
             condition: DisplayCondition::Always,
         }],
         prefix: "",

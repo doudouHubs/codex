@@ -1,0 +1,11 @@
+---
+source: tui/src/pager_overlay.rs
+expression: "embedded_transcript_snapshot(&mut overlay, area)"
+---
+line-02        │
+               ┃
+line-03        ┃
+               │
+line-04        │
+               │
+

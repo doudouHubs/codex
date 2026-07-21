@@ -661,6 +661,12 @@ pub(crate) enum AppEvent {
         result: Result<SkillsListResponse, String>,
     },
 
+    /// Result of a generation-scoped rule-system sidebar refresh.
+    RulesSidebarLoaded {
+        generation: u64,
+        result: Result<crate::rules_sidebar::RulesSidebarLoad, String>,
+    },
+
     /// Begin buffering initial resume replay rows before they are written to scrollback.
     BeginInitialHistoryReplayBuffer,
 

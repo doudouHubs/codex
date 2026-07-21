@@ -110,8 +110,8 @@ const KEYMAP_CONTEXT_TABS: &[KeymapContextTab] = &[
     KeymapContextTab {
         id: "navigation-shortcuts",
         label: "Navigation",
-        description: "Pager and selection-list navigation shortcuts.",
-        contexts: &["pager", "list"],
+        description: "Pager, rules sidebar, and selection-list navigation shortcuts.",
+        contexts: &["pager", "rules_sidebar", "list"],
     },
     KeymapContextTab {
         id: "approval-shortcuts",
