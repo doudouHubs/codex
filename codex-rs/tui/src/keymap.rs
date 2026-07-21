@@ -1162,12 +1162,12 @@ impl RuntimeKeymap {
             rules_sidebar: RulesSidebarKeymap {
                 transcript_jump_top: default_bindings![ctrl(KeyCode::Home)],
                 transcript_jump_bottom: default_bindings![ctrl(KeyCode::End)],
-                scroll_up: default_bindings![alt(KeyCode::Up)],
-                scroll_down: default_bindings![alt(KeyCode::Down)],
-                page_up: default_bindings![alt(KeyCode::PageUp)],
-                page_down: default_bindings![alt(KeyCode::PageDown)],
-                // Ctrl+T 始终由全局 toggle 处理；Esc 是侧栏上下文里的快速关闭键。
-                close: default_bindings![plain(KeyCode::Esc)],
+                // Ctrl+Alt 避开官方 Alt+Up 编辑排队消息及 composer 的普通导航键。
+                scroll_up: default_bindings![raw(key_hint::ctrl_alt(KeyCode::Up))],
+                scroll_down: default_bindings![raw(key_hint::ctrl_alt(KeyCode::Down))],
+                page_up: default_bindings![raw(key_hint::ctrl_alt(KeyCode::PageUp))],
+                page_down: default_bindings![raw(key_hint::ctrl_alt(KeyCode::PageDown))],
+                close: default_bindings![],
             },
             list: ListKeymap {
                 move_up: default_bindings![
@@ -2927,8 +2927,9 @@ mod tests {
         );
         assert_eq!(
             runtime.rules_sidebar.scroll_up,
-            vec![key_hint::alt(KeyCode::Up)]
+            vec![key_hint::ctrl_alt(KeyCode::Up)]
         );
+        assert!(runtime.rules_sidebar.close.is_empty());
         assert_eq!(
             runtime.rules_sidebar.transcript_jump_top,
             vec![key_hint::ctrl(KeyCode::Home)]

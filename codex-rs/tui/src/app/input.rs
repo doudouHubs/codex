@@ -101,7 +101,7 @@ impl App {
         // editing behavior for moving across words inside a draft.
         let allow_agent_word_motion_fallback = !self.enhanced_keys_supported
             && self.chat_widget.composer_text_with_pending().is_empty();
-        if !self.fullscreen_surface_active()
+        if self.overlay.is_none()
             && self.chat_widget.no_modal_or_popup_active()
             // Alt+Left/Right are also natural word-motion keys in the composer. Keep agent
             // fast-switch available only once the draft is empty so editing behavior wins whenever
@@ -119,7 +119,7 @@ impl App {
             }
             return;
         }
-        if !self.fullscreen_surface_active()
+        if self.overlay.is_none()
             && self.chat_widget.no_modal_or_popup_active()
             // Mirror the previous-agent rule above: empty drafts may use these keys for thread
             // switching, but non-empty drafts keep them for expected word-wise cursor motion.
@@ -172,13 +172,9 @@ impl App {
         }
 
         if app_keymap_shortcuts_available && self.keymap.app.open_transcript.is_pressed(key_event) {
-            // Enter alternate screen and set viewport to full size.
-            let _ = tui.enter_alt_screen();
-            self.overlay = Some(Overlay::new_transcript(
-                self.transcript_cells.clone(),
-                self.keymap.pager.clone(),
-            ));
-            tui.frame_requester().schedule_frame();
+            let overlay =
+                Overlay::new_transcript(self.transcript_cells.clone(), self.keymap.pager.clone());
+            self.activate_overlay(tui, overlay);
             return;
         }
 
@@ -187,7 +183,7 @@ impl App {
         {
             // Only launch the external editor if there is no overlay and the bottom pane is not in use.
             // Note that it can be launched while a task is running to enable editing while the previous turn is ongoing.
-            if !self.fullscreen_surface_active()
+            if self.overlay.is_none()
                 && self.chat_widget.can_launch_external_editor()
                 && self.chat_widget.external_editor_state() == ExternalEditorState::Closed
             {
@@ -283,7 +279,7 @@ impl App {
     }
 
     fn app_keymap_shortcuts_available(&self) -> bool {
-        !self.fullscreen_surface_active() && self.chat_widget.no_modal_or_popup_active()
+        self.overlay.is_none() && self.chat_widget.no_modal_or_popup_active()
     }
 
     pub(super) fn refresh_status_line(&mut self) {
@@ -304,5 +300,18 @@ mod tests {
         app.chat_widget.open_keymap_debug(&keymap);
 
         assert!(!app.app_keymap_shortcuts_available());
+    }
+
+    #[tokio::test]
+    async fn app_keymap_shortcuts_remain_available_while_rules_sidebar_is_active() {
+        let mut app = make_test_app().await;
+        app.rules_sidebar = Some(RulesSidebarState::new(
+            ThreadId::new(),
+            app.config.cwd.to_path_buf(),
+            Vec::new(),
+            app.keymap.pager.clone(),
+        ));
+
+        assert!(app.app_keymap_shortcuts_available());
     }
 }

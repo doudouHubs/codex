@@ -5,7 +5,10 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use codex_protocol::ThreadId;
+use crossterm::event::MouseEvent;
+use crossterm::event::MouseEventKind;
 use ratatui::buffer::Buffer;
+use ratatui::layout::Position;
 use ratatui::layout::Rect;
 use ratatui::style::Stylize;
 use ratatui::text::Line;
@@ -49,6 +52,46 @@ pub(crate) struct RulesSidebarLoad {
 pub(crate) struct RulesSidebarCursor {
     pub(crate) position: (u16, u16),
     pub(crate) area: Rect,
+}
+
+#[derive(Clone, Copy)]
+struct RulesSidebarLayout {
+    timeline: Rect,
+    bottom: Rect,
+    divider: Rect,
+    rules: Rect,
+}
+
+fn rules_sidebar_layout(area: Rect, chat_widget: &ChatWidget) -> Option<RulesSidebarLayout> {
+    if area.width < RULES_SIDEBAR_MIN_SPLIT_WIDTH {
+        return None;
+    }
+    let rules_x = area.right().saturating_sub(RULES_SIDEBAR_WIDTH);
+    let divider = Rect::new(rules_x.saturating_sub(1), area.y, 1, area.height);
+    let left = Rect::new(
+        area.x,
+        area.y,
+        divider.x.saturating_sub(area.x),
+        area.height,
+    );
+    let rules = Rect::new(rules_x, area.y, RULES_SIDEBAR_WIDTH, area.height);
+    let bottom_height = chat_widget
+        .rules_sidebar_bottom_pane_height(left.width)
+        .min(left.height);
+    let timeline_height = left.height.saturating_sub(bottom_height);
+    let timeline = Rect::new(left.x, left.y, left.width, timeline_height);
+    let bottom = Rect::new(
+        left.x,
+        left.y.saturating_add(timeline_height),
+        left.width,
+        bottom_height,
+    );
+    Some(RulesSidebarLayout {
+        timeline,
+        bottom,
+        divider,
+        rules,
+    })
 }
 
 #[derive(Deserialize)]
@@ -164,6 +207,30 @@ impl RulesSidebarState {
         self.transcript.scroll_to(destination);
     }
 
+    pub(crate) fn handle_mouse_scroll(
+        &mut self,
+        area: Rect,
+        chat_widget: &ChatWidget,
+        event: MouseEvent,
+    ) -> bool {
+        let direction = match event.kind {
+            MouseEventKind::ScrollUp => ScrollDirection::Up,
+            MouseEventKind::ScrollDown => ScrollDirection::Down,
+            _ => return false,
+        };
+        let Some(layout) = rules_sidebar_layout(area, chat_widget) else {
+            return false;
+        };
+        if !layout
+            .timeline
+            .contains(Position::new(event.column, event.row))
+        {
+            return false;
+        }
+        self.scroll_transcript(direction);
+        true
+    }
+
     pub(crate) fn render(
         &mut self,
         area: Rect,
@@ -171,51 +238,30 @@ impl RulesSidebarState {
         chat_widget: &ChatWidget,
         active_key: Option<ActiveCellTranscriptKey>,
     ) -> Option<RulesSidebarCursor> {
-        if area.width < RULES_SIDEBAR_MIN_SPLIT_WIDTH {
+        let Some(layout) = rules_sidebar_layout(area, chat_widget) else {
             self.render_rules(area, buf);
             return None;
-        }
-
-        let rules_x = area.right().saturating_sub(RULES_SIDEBAR_WIDTH);
-        let divider = Rect::new(rules_x.saturating_sub(1), area.y, 1, area.height);
-        let left = Rect::new(
-            area.x,
-            area.y,
-            divider.x.saturating_sub(area.x),
-            area.height,
-        );
-        let rules = Rect::new(rules_x, area.y, RULES_SIDEBAR_WIDTH, area.height);
-        let bottom_height = chat_widget
-            .rules_sidebar_bottom_pane_height(left.width)
-            .min(left.height);
-        let timeline_height = left.height.saturating_sub(bottom_height);
-        let timeline = Rect::new(left.x, left.y, left.width, timeline_height);
-        let bottom = Rect::new(
-            left.x,
-            left.y.saturating_add(timeline_height),
-            left.width,
-            bottom_height,
-        );
+        };
 
         self.transcript
-            .sync_live_tail(left.width.max(1), active_key, |width| {
+            .sync_live_tail(layout.timeline.width.max(1), active_key, |width| {
                 chat_widget.active_cell_transcript_hyperlink_lines(width)
             });
-        self.transcript.render_timeline(timeline, buf);
-        chat_widget.render_rules_sidebar_bottom_pane(bottom, buf);
+        self.transcript.render_timeline(layout.timeline, buf);
+        chat_widget.render_rules_sidebar_bottom_pane(layout.bottom, buf);
         Paragraph::new(
-            (0..divider.height)
+            (0..layout.divider.height)
                 .map(|_| Line::from("│".dim()))
                 .collect::<Vec<_>>(),
         )
-        .render(divider, buf);
-        self.render_rules(rules, buf);
+        .render(layout.divider, buf);
+        self.render_rules(layout.rules, buf);
         chat_widget
-            .rules_sidebar_cursor_pos(bottom)
+            .rules_sidebar_cursor_pos(layout.bottom)
             .map(|position| RulesSidebarCursor {
                 position,
                 // 光标形态取决于 composer 实际布局，不能拿整个 frame 的宽度重新计算。
-                area: bottom,
+                area: layout.bottom,
             })
     }
 
@@ -278,7 +324,7 @@ impl RulesSidebarState {
             let footer = if self.max_scroll == 0 {
                 "Ctrl+T close".dim()
             } else {
-                "Alt+Up/Down scroll  Ctrl+T close".dim()
+                "Ctrl+Alt+Up/Down scroll  Ctrl+T close".dim()
             };
             Paragraph::new(footer).render(
                 Rect::new(inner.x, inner.bottom().saturating_sub(1), inner.width, 1),

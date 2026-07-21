@@ -18,9 +18,12 @@ use crossterm::SynchronizedUpdate;
 use crossterm::cursor::SetCursorStyle;
 use crossterm::event::DisableBracketedPaste;
 use crossterm::event::DisableFocusChange;
+use crossterm::event::DisableMouseCapture;
 use crossterm::event::EnableBracketedPaste;
 use crossterm::event::EnableFocusChange;
+use crossterm::event::EnableMouseCapture;
 use crossterm::event::KeyEvent;
+use crossterm::event::MouseEvent;
 use crossterm::terminal::EnterAlternateScreen;
 use crossterm::terminal::LeaveAlternateScreen;
 #[cfg(not(unix))]
@@ -232,6 +235,79 @@ impl Command for DisableAlternateScroll {
     }
 }
 
+#[cfg(windows)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct EnableAnsiMouseCapture;
+
+#[cfg(windows)]
+impl Command for EnableAnsiMouseCapture {
+    fn write_ansi(&self, f: &mut impl fmt::Write) -> fmt::Result {
+        f.write_str("\x1b[?1000h\x1b[?1002h\x1b[?1003h\x1b[?1015h\x1b[?1006h")
+    }
+
+    fn execute_winapi(&self) -> Result<()> {
+        Err(std::io::Error::other(
+            "tried to enable ANSI mouse capture using WinAPI",
+        ))
+    }
+
+    fn is_ansi_code_supported(&self) -> bool {
+        true
+    }
+}
+
+#[cfg(windows)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct DisableAnsiMouseCapture;
+
+#[cfg(windows)]
+impl Command for DisableAnsiMouseCapture {
+    fn write_ansi(&self, f: &mut impl fmt::Write) -> fmt::Result {
+        f.write_str("\x1b[?1006l\x1b[?1015l\x1b[?1003l\x1b[?1002l\x1b[?1000l")
+    }
+
+    fn execute_winapi(&self) -> Result<()> {
+        Err(std::io::Error::other(
+            "tried to disable ANSI mouse capture using WinAPI",
+        ))
+    }
+
+    fn is_ansi_code_supported(&self) -> bool {
+        true
+    }
+}
+
+fn enable_mouse_capture_mode(writer: &mut impl Write) -> Result<()> {
+    execute!(writer, EnableMouseCapture)?;
+    #[cfg(windows)]
+    if let Err(err) = execute!(writer, EnableAnsiMouseCapture) {
+        // Windows Terminal 通过 VT 序列决定是否把滚轮交给应用；任一模式失败都要回滚，
+        // 否则调用方会认为 capture 未启用，但控制台仍可能残留半套鼠标状态。
+        let _ = execute!(writer, DisableAnsiMouseCapture);
+        let _ = execute!(writer, DisableMouseCapture);
+        return Err(err);
+    }
+    Ok(())
+}
+
+fn disable_mouse_capture_mode(writer: &mut impl Write) -> Result<()> {
+    let mut first_error = None;
+    #[cfg(windows)]
+    if let Err(err) = execute!(writer, DisableAnsiMouseCapture) {
+        first_error = Some(err);
+    }
+    if let Err(err) = execute!(writer, DisableMouseCapture) {
+        first_error.get_or_insert(err);
+    }
+    first_error.map_or(Ok(()), Err)
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum AlternateScrollMode {
+    Enabled,
+    Disabled,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum RawModeRestore {
     Disable,
@@ -259,6 +335,7 @@ fn restore_common(
         first_error.get_or_insert(err);
     }
     let _ = execute!(stdout(), DisableFocusChange);
+    let _ = disable_mouse_capture_mode(&mut stdout());
     if matches!(raw_mode_restore, RawModeRestore::Disable)
         && let Err(err) = disable_raw_mode()
     {
@@ -513,6 +590,8 @@ fn set_panic_hook() {
 pub enum TuiEvent {
     /// A terminal key event after focus, paste, and protocol bookkeeping has been handled.
     Key(KeyEvent),
+    /// A terminal mouse event emitted while an interactive surface owns mouse capture.
+    Mouse(MouseEvent),
     /// A bracketed paste payload normalized by the app layer before it reaches the composer.
     Paste(String),
     /// A terminal size notification that should be handled as resize-sensitive draw work.
@@ -546,6 +625,9 @@ pub struct Tui {
     is_zellij: bool,
     // When false, enter_alt_screen() becomes a no-op.
     alt_screen_enabled: bool,
+    // Desired input modes are shared with Unix suspend/resume handling.
+    alternate_scroll_enabled: Arc<AtomicBool>,
+    mouse_capture_enabled: Arc<AtomicBool>,
     // Keeps unmanaged process stderr writes out of the inline viewport.
     _stderr_guard: terminal_stderr::TerminalStderrGuard,
 }
@@ -599,6 +681,8 @@ impl Tui {
             notification_condition: NotificationCondition::default(),
             is_zellij,
             alt_screen_enabled: true,
+            alternate_scroll_enabled: Arc::new(AtomicBool::new(true)),
+            mouse_capture_enabled: Arc::new(AtomicBool::new(false)),
             _stderr_guard: stderr_guard,
         }
     }
@@ -655,6 +739,7 @@ impl Tui {
 
         // Leave alt screen if active to avoid conflicts with external program `f`.
         let was_alt_screen = self.is_alt_screen_active();
+        let was_mouse_capture_enabled = self.mouse_capture_enabled.load(Ordering::Relaxed);
         if was_alt_screen {
             let _ = self.leave_alt_screen();
         }
@@ -678,7 +763,15 @@ impl Tui {
         flush_terminal_input_buffer();
 
         if was_alt_screen {
-            let _ = self.enter_alt_screen();
+            let alternate_scroll_mode = if self.alternate_scroll_enabled.load(Ordering::Relaxed) {
+                AlternateScrollMode::Enabled
+            } else {
+                AlternateScrollMode::Disabled
+            };
+            let _ = self.enter_alt_screen_with_mode(alternate_scroll_mode);
+        }
+        if was_mouse_capture_enabled {
+            let _ = self.enable_mouse_capture();
         }
 
         self.resume_events();
@@ -721,6 +814,8 @@ impl Tui {
             self.terminal_focused.clone(),
             self.suspend_context.clone(),
             self.alt_screen_active.clone(),
+            self.alternate_scroll_enabled.clone(),
+            self.mouse_capture_enabled.clone(),
         );
         #[cfg(not(unix))]
         let stream = TuiEventStream::new(
@@ -734,12 +829,31 @@ impl Tui {
     /// Enter alternate screen and expand the viewport to full terminal size, saving the current
     /// inline viewport for restoration when leaving.
     pub fn enter_alt_screen(&mut self) -> Result<()> {
+        self.enter_alt_screen_with_mode(AlternateScrollMode::Enabled)
+    }
+
+    /// Enter alternate screen without translating mouse-wheel input into direction keys.
+    pub fn enter_alt_screen_without_alternate_scroll(&mut self) -> Result<()> {
+        self.enter_alt_screen_with_mode(AlternateScrollMode::Disabled)
+    }
+
+    fn enter_alt_screen_with_mode(&mut self, mode: AlternateScrollMode) -> Result<()> {
         if !self.alt_screen_enabled {
             return Ok(());
         }
+        self.alternate_scroll_enabled.store(
+            matches!(mode, AlternateScrollMode::Enabled),
+            Ordering::Relaxed,
+        );
         let _ = execute!(self.terminal.backend_mut(), EnterAlternateScreen);
-        // Enable "alternate scroll" so terminals may translate wheel to arrows
-        let _ = execute!(self.terminal.backend_mut(), EnableAlternateScroll);
+        match mode {
+            AlternateScrollMode::Enabled => {
+                let _ = execute!(self.terminal.backend_mut(), EnableAlternateScroll);
+            }
+            AlternateScrollMode::Disabled => {
+                let _ = execute!(self.terminal.backend_mut(), DisableAlternateScroll);
+            }
+        }
         if let Ok(size) = self.terminal.size() {
             self.alt_saved_viewport = Some(self.terminal.viewport_area);
             self.terminal.set_viewport_area(ratatui::layout::Rect::new(
@@ -754,8 +868,38 @@ impl Tui {
         Ok(())
     }
 
+    /// Restore wheel-to-direction-key translation for an already active alternate-screen view.
+    pub fn enable_alternate_scroll(&mut self) {
+        self.alternate_scroll_enabled.store(true, Ordering::Relaxed);
+        if self.is_alt_screen_active() {
+            let _ = execute!(self.terminal.backend_mut(), EnableAlternateScroll);
+        }
+    }
+
+    /// Capture terminal mouse events for a surface that handles them explicitly.
+    pub fn enable_mouse_capture(&mut self) -> Result<()> {
+        if self.mouse_capture_enabled.load(Ordering::Relaxed) {
+            return Ok(());
+        }
+        enable_mouse_capture_mode(self.terminal.backend_mut())?;
+        self.mouse_capture_enabled.store(true, Ordering::Relaxed);
+        Ok(())
+    }
+
+    /// Restore native terminal mouse handling when the active surface closes.
+    pub fn disable_mouse_capture(&mut self) -> Result<()> {
+        if !self.mouse_capture_enabled.load(Ordering::Relaxed) {
+            return Ok(());
+        }
+        let result = disable_mouse_capture_mode(self.terminal.backend_mut());
+        self.mouse_capture_enabled.store(false, Ordering::Relaxed);
+        result
+    }
+
     /// Leave alternate screen and restore the previously saved inline viewport, if any.
     pub fn leave_alt_screen(&mut self) -> Result<()> {
+        // Mouse capture must never leak into the inline UI or the parent shell.
+        let _ = self.disable_mouse_capture();
         if !self.alt_screen_enabled {
             return Ok(());
         }

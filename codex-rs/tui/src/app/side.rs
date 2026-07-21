@@ -331,7 +331,7 @@ impl App {
         tui: &mut tui::Tui,
         app_server: &mut AppServerSession,
     ) -> bool {
-        if !self.fullscreen_surface_active()
+        if self.overlay.is_none()
             && self.chat_widget.no_modal_or_popup_active()
             && self.chat_widget.composer_is_empty()
             && let Some(parent_thread_id) = self.active_side_parent_thread_id()

@@ -2,7 +2,6 @@ use std::time::Duration;
 
 use super::*;
 use crate::pager_overlay::ScrollDestination;
-use crate::pager_overlay::ScrollDirection;
 use crate::rules_sidebar::RulesSidebarLoad;
 use crate::rules_sidebar::RulesSidebarState;
 use crate::rules_sidebar::load_rules;
@@ -11,7 +10,7 @@ use crate::rules_sidebar::locate_rule_system_binary;
 const RULES_POLL_INTERVAL: Duration = Duration::from_secs(2);
 
 impl App {
-    pub(super) fn fullscreen_surface_active(&self) -> bool {
+    pub(super) fn alt_screen_surface_active(&self) -> bool {
         self.overlay.is_some() || self.rules_sidebar.is_some()
     }
 
@@ -23,7 +22,10 @@ impl App {
             );
             return;
         };
-        let _ = tui.enter_alt_screen();
+        // sidebar 不拥有键盘焦点，禁用 wheel->arrow 转换，避免滚轮误触 composer 输入历史。
+        let _ = tui.enter_alt_screen_without_alternate_scroll();
+        // 显式 mouse event 能区分实体方向键，只在侧栏生命周期内启用捕获。
+        let _ = tui.enable_mouse_capture();
         self.rules_sidebar_generation = self.rules_sidebar_generation.wrapping_add(1);
         self.rules_sidebar = Some(RulesSidebarState::new(
             thread_id,
@@ -48,17 +50,6 @@ impl App {
                 self.history_line_wrap_policy(),
             );
         }
-        tui.frame_requester().schedule_frame();
-    }
-
-    fn open_transcript_from_rules_sidebar(&mut self, tui: &mut tui::Tui) {
-        self.rules_sidebar = None;
-        self.rules_sidebar_generation = self.rules_sidebar_generation.wrapping_add(1);
-        // 两个视图共用同一次 alternate-screen 生命周期，避免二次 enter 覆盖原 inline viewport。
-        self.overlay = Some(Overlay::new_transcript(
-            self.transcript_cells.clone(),
-            self.keymap.pager.clone(),
-        ));
         tui.frame_requester().schedule_frame();
     }
 
@@ -129,29 +120,25 @@ impl App {
     }
 
     fn handle_rules_sidebar_key(&mut self, tui: &mut tui::Tui, key_event: KeyEvent) -> bool {
-        if self.keymap.app.toggle_rules_sidebar.is_pressed(key_event)
-            || self.keymap.rules_sidebar.close.is_pressed(key_event)
-        {
+        // 官方输入层级中 popup/modal 拥有当前焦点，全局视图快捷键也必须暂时让路；
+        // 侧栏仅在 composer 的普通输入状态下消费自己的专属绑定。
+        if !self.chat_widget.no_modal_or_popup_active() {
+            return false;
+        }
+        if self.keymap.app.toggle_rules_sidebar.is_pressed(key_event) {
             self.close_rules_sidebar(tui);
             return true;
         }
         if self.keymap.app.open_transcript.is_pressed(key_event) {
-            self.open_transcript_from_rules_sidebar(tui);
+            self.open_transcript_overlay(tui);
+            return true;
+        }
+        if self.keymap.rules_sidebar.close.is_pressed(key_event) {
+            self.close_rules_sidebar(tui);
             return true;
         }
         let Some(state) = self.rules_sidebar.as_mut() else {
             return false;
-        };
-        let transcript_scroll = if key_event.modifiers.is_empty() {
-            match key_event.code {
-                // alternate-scroll 会把滚轮转换成无修饰方向键；在这里消费它，既恢复左栏滚动，
-                // 又避免启用 mouse capture 后破坏终端原生文本选择。
-                KeyCode::Up => Some(ScrollDirection::Up),
-                KeyCode::Down => Some(ScrollDirection::Down),
-                _ => None,
-            }
-        } else {
-            None
         };
         if self
             .keymap
@@ -167,8 +154,6 @@ impl App {
             .is_pressed(key_event)
         {
             state.jump_transcript(ScrollDestination::Bottom);
-        } else if let Some(direction) = transcript_scroll {
-            state.scroll_transcript(direction);
         } else if self.keymap.rules_sidebar.scroll_up.is_pressed(key_event) {
             state.scroll_up();
         } else if self.keymap.rules_sidebar.scroll_down.is_pressed(key_event) {
@@ -178,6 +163,23 @@ impl App {
         } else if self.keymap.rules_sidebar.page_down.is_pressed(key_event) {
             state.page_down();
         } else {
+            return false;
+        }
+        tui.frame_requester().schedule_frame();
+        true
+    }
+
+    fn handle_rules_sidebar_mouse(
+        &mut self,
+        tui: &mut tui::Tui,
+        mouse_event: crossterm::event::MouseEvent,
+    ) -> bool {
+        let area = tui.terminal.viewport_area;
+        let chat_widget = &self.chat_widget;
+        let Some(state) = self.rules_sidebar.as_mut() else {
+            return false;
+        };
+        if !state.handle_mouse_scroll(area, chat_widget, mouse_event) {
             return false;
         }
         tui.frame_requester().schedule_frame();
@@ -195,6 +197,9 @@ impl App {
                 if !self.handle_rules_sidebar_key(tui, key_event) {
                     self.handle_key_event(tui, app_server, key_event).await;
                 }
+            }
+            TuiEvent::Mouse(mouse_event) => {
+                self.handle_rules_sidebar_mouse(tui, mouse_event);
             }
             TuiEvent::Paste(pasted) => {
                 self.chat_widget.handle_paste(pasted.replace('\r', "\n"));

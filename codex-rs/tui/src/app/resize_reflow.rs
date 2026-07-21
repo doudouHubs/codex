@@ -98,7 +98,7 @@ impl App {
         if display.is_empty() {
             return;
         }
-        if self.fullscreen_surface_active() {
+        if self.alt_screen_surface_active() {
             self.deferred_history_lines.extend(display);
         } else {
             tui.insert_history_hyperlink_lines_with_wrap_policy(
@@ -115,7 +115,7 @@ impl App {
     /// Starting this buffer while an overlay owns rendering would split transcript ownership, so
     /// overlay replay continues through the normal deferred-history path.
     pub(super) fn begin_initial_history_replay_buffer(&mut self) {
-        if !self.fullscreen_surface_active() {
+        if !self.alt_screen_surface_active() {
             self.initial_history_replay_buffer = Some(Default::default());
         }
     }
@@ -126,7 +126,7 @@ impl App {
     /// defer terminal writes until the replay is complete and reuse the resize-reflow tail renderer
     /// so only the rows the terminal would retain are formatted and inserted.
     pub(super) fn begin_thread_switch_history_replay_buffer(&mut self) {
-        if self.resize_reflow_max_rows().is_some() && !self.fullscreen_surface_active() {
+        if self.resize_reflow_max_rows().is_some() && !self.alt_screen_surface_active() {
             self.initial_history_replay_buffer = Some(InitialHistoryReplayBuffer {
                 retained_lines: VecDeque::new(),
                 render_from_transcript_tail: true,
@@ -144,7 +144,7 @@ impl App {
             return;
         };
 
-        if buffer.render_from_transcript_tail || self.fullscreen_surface_active() {
+        if buffer.render_from_transcript_tail || self.alt_screen_surface_active() {
             // Reflow clears any pre-replay or partially emitted history and applies the reserved
             // history width. It also waits for an active overlay to close before rebuilding.
             self.schedule_immediate_resize_reflow(tui);
@@ -186,7 +186,7 @@ impl App {
         if let Some(buffer) = &mut self.initial_history_replay_buffer {
             if let Some(max_rows) = max_rows {
                 Self::buffer_initial_history_replay_display_lines(buffer, display, max_rows);
-            } else if self.fullscreen_surface_active() {
+            } else if self.alt_screen_surface_active() {
                 self.deferred_history_lines.extend(display);
             } else {
                 tui.insert_history_hyperlink_lines_with_wrap_policy(
@@ -334,7 +334,7 @@ impl App {
             return;
         };
         if Instant::now() < deadline
-            || self.fullscreen_surface_active()
+            || self.alt_screen_surface_active()
             || !self.transcript_cells.is_empty()
         {
             return;
@@ -380,7 +380,7 @@ impl App {
             tui.frame_requester().schedule_frame_in(deadline - now);
             return Ok(());
         }
-        if self.fullscreen_surface_active() {
+        if self.alt_screen_surface_active() {
             return Ok(());
         }
 

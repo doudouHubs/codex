@@ -476,19 +476,17 @@ impl App {
             AppEvent::DiffResult(text) => {
                 // Clear the in-progress state in the bottom pane
                 self.chat_widget.on_diff_complete();
-                // Enter alternate screen using TUI helper and build pager lines
-                let _ = tui.enter_alt_screen();
                 let pager_lines: Vec<ratatui::text::Line<'static>> = if text.trim().is_empty() {
                     vec!["No changes detected.".italic().into()]
                 } else {
                     text.lines().map(ansi_escape_line).collect()
                 };
-                self.overlay = Some(Overlay::new_static_with_lines(
+                let overlay = Overlay::new_static_with_lines(
                     pager_lines,
                     "D I F F".to_string(),
                     self.keymap.pager.clone(),
-                ));
-                tui.frame_requester().schedule_frame();
+                );
+                self.activate_overlay(tui, overlay);
             }
             AppEvent::OpenAppLink {
                 app_id,
@@ -2095,26 +2093,25 @@ impl App {
             }
             AppEvent::FullScreenApprovalRequest(request) => match request {
                 ApprovalRequest::ApplyPatch(request) => {
-                    let _ = tui.enter_alt_screen();
                     let diff_summary = DiffSummary::new(request.changes, request.cwd);
-                    self.overlay = Some(Overlay::new_static_with_renderables(
+                    let overlay = Overlay::new_static_with_renderables(
                         vec![diff_summary.into()],
                         "P A T C H".to_string(),
                         self.keymap.pager.clone(),
-                    ));
+                    );
+                    self.activate_overlay(tui, overlay);
                 }
                 ApprovalRequest::Exec(request) => {
-                    let _ = tui.enter_alt_screen();
                     let full_cmd = strip_bash_lc_and_escape(&request.command);
                     let full_cmd_lines = highlight_bash_to_lines(&full_cmd);
-                    self.overlay = Some(Overlay::new_static_with_lines(
+                    let overlay = Overlay::new_static_with_lines(
                         full_cmd_lines,
                         "E X E C".to_string(),
                         self.keymap.pager.clone(),
-                    ));
+                    );
+                    self.activate_overlay(tui, overlay);
                 }
                 ApprovalRequest::Permissions(request) => {
-                    let _ = tui.enter_alt_screen();
                     let mut lines = Vec::new();
                     if let Some(environment_id) = request.environment_id {
                         lines.push(Line::from(vec![
@@ -2135,25 +2132,26 @@ impl App {
                             rule_line.cyan(),
                         ]));
                     }
-                    self.overlay = Some(Overlay::new_static_with_renderables(
+                    let overlay = Overlay::new_static_with_renderables(
                         vec![Box::new(Paragraph::new(lines).wrap(Wrap { trim: false }))],
                         "P E R M I S S I O N S".to_string(),
                         self.keymap.pager.clone(),
-                    ));
+                    );
+                    self.activate_overlay(tui, overlay);
                 }
                 ApprovalRequest::McpElicitation(request) => {
-                    let _ = tui.enter_alt_screen();
                     let paragraph = Paragraph::new(vec![
                         Line::from(vec!["Server: ".into(), request.server_name.bold()]),
                         Line::from(""),
                         Line::from(request.message),
                     ])
                     .wrap(Wrap { trim: false });
-                    self.overlay = Some(Overlay::new_static_with_renderables(
+                    let overlay = Overlay::new_static_with_renderables(
                         vec![Box::new(paragraph)],
                         "E L I C I T A T I O N".to_string(),
                         self.keymap.pager.clone(),
-                    ));
+                    );
+                    self.activate_overlay(tui, overlay);
                 }
             },
             AppEvent::StatusLineSetup {
