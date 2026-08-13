@@ -1723,7 +1723,9 @@ impl ChatComposer {
         if self.draft.disable_paste_burst {
             // When burst detection is disabled, treat IME/non-ASCII input as normal typing.
             // In particular, do not retro-capture or buffer already-inserted prefix text.
+            let input = self.normalize_first_keyboard_symbol(input);
             self.draft.textarea.input(input);
+            self.sync_bash_mode_from_text();
             let text_after = self.draft.textarea.text();
             self.draft
                 .pending_pastes
@@ -1784,7 +1786,9 @@ impl ChatComposer {
         if let Some(pasted) = self.draft.paste_burst.flush_before_modified_input() {
             self.handle_paste(pasted);
         }
+        let input = self.normalize_first_keyboard_symbol(input);
         self.draft.textarea.input(input);
+        self.sync_bash_mode_from_text();
 
         let text_after = self.draft.textarea.text();
         self.draft
@@ -3080,7 +3084,7 @@ impl ChatComposer {
             && matches!(
                 key_event,
                 KeyEvent {
-                    code: KeyCode::Char('/'),
+                    code: KeyCode::Char('/' | '、'),
                     modifiers: KeyModifiers::NONE,
                     kind: KeyEventKind::Press | KeyEventKind::Repeat,
                     ..
@@ -3100,7 +3104,7 @@ impl ChatComposer {
             && matches!(
                 key_event,
                 KeyEvent {
-                    code: KeyCode::Char('!'),
+                    code: KeyCode::Char('!' | '！'),
                     modifiers: KeyModifiers::NONE,
                     kind: KeyEventKind::Press | KeyEventKind::Repeat,
                     ..
@@ -3352,6 +3356,7 @@ impl ChatComposer {
             return (InputResult::None, true);
         }
 
+        let input = self.normalize_first_keyboard_symbol(input);
         self.draft.textarea.input(input);
         self.sync_bash_mode_from_text();
 
@@ -3380,6 +3385,25 @@ impl ChatComposer {
         }
 
         (InputResult::None, true)
+    }
+
+    fn normalize_first_keyboard_symbol(&self, input: KeyEvent) -> KeyEvent {
+        if !self.is_empty()
+            || self.draft.textarea.is_vim_normal_mode()
+            || has_ctrl_or_alt(input.modifiers)
+        {
+            return input;
+        }
+
+        // 只在 PasteBurst 已确认走普通键盘插入后转换首字符；明确粘贴和被识别为粘贴的
+        // 键盘 burst 不经过这里，从而保持粘贴内容原样。
+        let code = match input.code {
+            KeyCode::Char('￥') => KeyCode::Char('$'),
+            KeyCode::Char('！') => KeyCode::Char('!'),
+            KeyCode::Char('、') => KeyCode::Char('/'),
+            _ => input.code,
+        };
+        KeyEvent { code, ..input }
     }
 
     fn sync_bash_mode_from_text(&mut self) {
@@ -5167,6 +5191,69 @@ mod tests {
     }
 
     #[test]
+    fn full_width_leading_symbols_are_normalized_for_keyboard_input() {
+        use crossterm::event::KeyCode;
+        use crossterm::event::KeyEvent;
+        use crossterm::event::KeyModifiers;
+
+        let (mut composer, _rx) = new_test_composer();
+        composer.set_disable_paste_burst(/*disabled*/ true);
+
+        let (result, needs_redraw) =
+            composer.handle_key_event(KeyEvent::new(KeyCode::Char('￥'), KeyModifiers::NONE));
+
+        assert!(matches!(result, InputResult::None));
+        assert!(needs_redraw);
+        assert_eq!(composer.current_text(), "$");
+        assert!(!composer.draft.is_bash_mode);
+
+        let (mut composer, _rx) = new_test_composer();
+        composer.set_disable_paste_burst(/*disabled*/ true);
+
+        let (result, needs_redraw) =
+            composer.handle_key_event(KeyEvent::new(KeyCode::Char('！'), KeyModifiers::NONE));
+
+        assert!(matches!(result, InputResult::None));
+        assert!(needs_redraw);
+        assert_eq!(composer.current_text(), "!");
+        assert!(composer.draft.is_bash_mode);
+        assert!(composer.draft.textarea.is_empty());
+
+        let (mut composer, _rx) = new_test_composer();
+        composer.set_disable_paste_burst(/*disabled*/ true);
+
+        let (result, needs_redraw) =
+            composer.handle_key_event(KeyEvent::new(KeyCode::Char('、'), KeyModifiers::NONE));
+
+        assert!(matches!(result, InputResult::None));
+        assert!(needs_redraw);
+        assert_eq!(composer.current_text(), "/");
+        assert!(!composer.draft.is_bash_mode);
+    }
+
+    #[test]
+    fn full_width_symbols_are_preserved_after_existing_text_or_explicit_paste() {
+        use crossterm::event::KeyCode;
+        use crossterm::event::KeyEvent;
+        use crossterm::event::KeyModifiers;
+
+        let (mut composer, _rx) = new_test_composer();
+        composer.set_disable_paste_burst(/*disabled*/ true);
+        composer.handle_paste("text".to_string());
+        let _ = composer.handle_key_event(KeyEvent::new(KeyCode::Char('￥'), KeyModifiers::NONE));
+        assert_eq!(composer.current_text(), "text￥");
+
+        let (mut composer, _rx) = new_test_composer();
+        composer.handle_paste("￥！".to_string());
+        assert_eq!(composer.current_text(), "￥！");
+        assert!(!composer.draft.is_bash_mode);
+
+        let (mut composer, _rx) = new_test_composer();
+        composer.handle_paste("、".to_string());
+        assert_eq!(composer.current_text(), "、");
+    }
+
+    #[test]
     fn esc_keeps_shell_mode_when_paste_burst_flushes_pending_text() {
         use crossterm::event::KeyCode;
         use crossterm::event::KeyEvent;
@@ -5636,6 +5723,44 @@ mod tests {
             composer.vim_mode_indicator_span(),
             Some("Vim: Insert".green())
         );
+    }
+
+    #[test]
+    fn full_width_bang_enters_shell_mode_in_vim_normal_mode() {
+        use crossterm::event::KeyCode;
+        use crossterm::event::KeyEvent;
+        use crossterm::event::KeyModifiers;
+
+        let (mut composer, _rx) = new_test_composer();
+        composer.set_vim_enabled(/*enabled*/ true);
+
+        let (result, needs_redraw) =
+            composer.handle_key_event(KeyEvent::new(KeyCode::Char('！'), KeyModifiers::NONE));
+
+        assert!(matches!(result, InputResult::None));
+        assert!(needs_redraw);
+        assert!(composer.draft.is_bash_mode);
+        assert_eq!(composer.current_text(), "!");
+        assert_eq!(composer.draft.textarea.text(), "");
+    }
+
+    #[test]
+    fn full_width_slash_enters_insert_mode_in_vim_normal_mode() {
+        use crossterm::event::KeyCode;
+        use crossterm::event::KeyEvent;
+        use crossterm::event::KeyModifiers;
+
+        let (mut composer, _rx) = new_test_composer();
+        composer.set_vim_enabled(/*enabled*/ true);
+
+        let (result, needs_redraw) =
+            composer.handle_key_event(KeyEvent::new(KeyCode::Char('、'), KeyModifiers::NONE));
+
+        assert!(matches!(result, InputResult::None));
+        assert!(needs_redraw);
+        assert_eq!(composer.draft.textarea.text(), "/");
+        assert_eq!(composer.draft.textarea.cursor(), "/".len());
+        assert!(matches!(composer.popups.active, ActivePopup::Command(_)));
     }
 
     #[test]
