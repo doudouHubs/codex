@@ -288,6 +288,9 @@ use ratatui::style::Color;
 /// placeholder in the UI.
 const LARGE_PASTE_CHAR_THRESHOLD: usize = 1000;
 
+/// 输入标记左右各保留一列空白，避免标记与边界或输入文本贴在一起。
+const INPUT_MARKER_OFFSET_COLS: u16 = 1;
+
 fn user_input_too_large_message(actual_chars: usize) -> String {
     format!(
         "Message exceeds the maximum length of {MAX_USER_INPUT_TEXT_CHARS} characters ({actual_chars} provided)."
@@ -777,7 +780,7 @@ impl ChatComposer {
             Layout::vertical([Constraint::Min(3), popup_constraint]).areas(area);
         let mut textarea_rect = composer_rect.inset(Insets::tlbr(
             /*top*/ 1,
-            LIVE_PREFIX_COLS,
+            LIVE_PREFIX_COLS + INPUT_MARKER_OFFSET_COLS,
             /*bottom*/ 1,
             /*right*/ 1u16.saturating_add(textarea_right_reserve),
         ));
@@ -4167,7 +4170,7 @@ impl ChatComposer {
             .unwrap_or_else(|| footer_height(&footer_props));
         let footer_spacing = Self::footer_spacing(footer_hint_height);
         let footer_total_height = footer_hint_height + footer_spacing;
-        const COLS_WITH_MARGIN: u16 = LIVE_PREFIX_COLS + 1;
+        const COLS_WITH_MARGIN: u16 = LIVE_PREFIX_COLS + INPUT_MARKER_OFFSET_COLS + 1;
         let inner_width =
             width.saturating_sub(COLS_WITH_MARGIN.saturating_add(textarea_right_reserve));
         let remote_images_height: u16 = self
@@ -4467,7 +4470,7 @@ impl ChatComposer {
                 "›".dim()
             };
             buf.set_span(
-                textarea_rect.x - LIVE_PREFIX_COLS,
+                textarea_rect.x.saturating_sub(LIVE_PREFIX_COLS),
                 textarea_rect.y,
                 &prompt,
                 textarea_rect.width,
@@ -4894,11 +4897,35 @@ mod tests {
 
         composer.set_text_content("!git".to_string(), Vec::new(), Vec::new());
         composer.move_cursor_to_end();
-        assert_eq!(composer.cursor_pos(area), Some((5, 1)));
+        assert_eq!(composer.cursor_pos(area), Some((6, 1)));
 
         composer.set_text_content("! git".to_string(), Vec::new(), Vec::new());
         composer.move_cursor_to_end();
-        assert_eq!(composer.cursor_pos(area), Some((6, 1)));
+        assert_eq!(composer.cursor_pos(area), Some((7, 1)));
+    }
+
+    #[test]
+    fn input_marker_has_balanced_spacing() {
+        let (tx, _rx) = unbounded_channel::<AppEvent>();
+        let sender = AppEventSender::new(tx);
+        let mut composer = ChatComposer::new(
+            /*has_input_focus*/ true,
+            sender,
+            /*enhanced_keys_supported*/ false,
+            "Ask Codex to do anything".to_string(),
+            /*disable_paste_burst*/ false,
+        );
+        composer.set_text_content("hello".to_string(), Vec::new(), Vec::new());
+
+        let area = Rect::new(0, 0, 40, 5);
+        let mut buf = Buffer::empty(area);
+        composer.render(area, &mut buf);
+
+        // 标记左右各保留一列空白，输入文本和光标从同一个新的 textarea 起点开始。
+        assert_eq!(buf[(0, 1)].symbol(), " ");
+        assert_eq!(buf[(1, 1)].symbol(), "›");
+        assert_eq!(buf[(2, 1)].symbol(), " ");
+        assert_eq!(buf[(3, 1)].symbol(), "h");
     }
 
     #[test]
@@ -4922,9 +4949,11 @@ mod tests {
         let mut buf = Buffer::empty(area);
         composer.render(area, &mut buf);
 
-        let prompt_cell = &buf[(0, 1)];
+        let prompt_cell = &buf[(1, 1)];
         assert_eq!(prompt_cell.symbol(), "!");
         assert_eq!(prompt_cell.style().fg, Some(Color::LightRed));
+        assert_eq!(buf[(2, 1)].symbol(), " ");
+        assert_eq!(buf[(3, 1)].symbol(), "g");
 
         let footer_y = area.height - 1;
         let footer_text = (0..area.width)
