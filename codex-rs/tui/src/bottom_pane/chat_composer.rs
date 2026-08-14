@@ -210,6 +210,8 @@ use super::mentions_v2::MentionV2Popup;
 use super::mentions_v2::MentionV2Selection;
 use super::paste_burst::CharDecision;
 use super::paste_burst::PasteBurst;
+use super::prompt_args::PromptOptimizationMode;
+use super::prompt_args::parse_prompt_input;
 use super::prompt_args::parse_slash_name;
 use super::skill_popup::MentionItem;
 use super::skill_popup::SkillPopup;
@@ -310,8 +312,10 @@ pub enum InputResult {
     /// isolated flow and sends the current optimized text to the main thread.
     PromptSubmitted {
         text: String,
+        history_text: String,
         submit: bool,
         mode: ComposerPromptMode,
+        optimization_mode: PromptOptimizationMode,
     },
     /// Exit prompt mode without submitting the current draft.
     PromptCancelled {
@@ -431,6 +435,7 @@ pub(crate) struct ChatComposer {
     windows_degraded_sandbox_active: bool,
     side_conversation_active: bool,
     prompt_mode: ComposerPromptMode,
+    prompt_optimization_mode: PromptOptimizationMode,
     prompt_mode_available: bool,
     history_search: Option<HistorySearchSession>,
     submit_keys: Vec<KeyBinding>,
@@ -604,6 +609,7 @@ impl ChatComposer {
             windows_degraded_sandbox_active: false,
             side_conversation_active: false,
             prompt_mode: ComposerPromptMode::Inactive,
+            prompt_optimization_mode: PromptOptimizationMode::Full,
             prompt_mode_available: true,
             history_search: None,
             submit_keys: vec![key_hint::plain(KeyCode::Enter)],
@@ -761,6 +767,10 @@ impl ChatComposer {
         self.prompt_mode
     }
 
+    pub(crate) fn set_prompt_optimization_mode(&mut self, mode: PromptOptimizationMode) {
+        self.prompt_optimization_mode = mode;
+    }
+
     pub(crate) fn set_prompt_mode(&mut self, mode: ComposerPromptMode) {
         self.prompt_mode = mode;
         self.footer.mode = reset_mode_after_activity(self.footer.mode);
@@ -826,22 +836,27 @@ impl ChatComposer {
             && matches!(key_event.kind, KeyEventKind::Press | KeyEventKind::Repeat);
         let plain_enter = self.submit_keys.is_pressed(key_event);
         if ctrl_enter || plain_enter {
-            let text = self.current_text_with_pending().trim().to_string();
-            if text.is_empty() {
+            let raw_text = self.current_text_with_pending().trim().to_string();
+            let prompt_input = parse_prompt_input(&raw_text, self.prompt_optimization_mode);
+            if prompt_input.text.is_empty() {
                 return Some((InputResult::None, true));
             }
-            self.record_prompt_history(text.clone());
+            self.prompt_optimization_mode = prompt_input.optimization_mode;
+            // 历史保留用户输入的参数，方便通过上下键恢复之前的模式选择；参数只在提交链路中消费。
+            self.record_prompt_history(raw_text.clone());
             self.set_text_content(String::new(), Vec::new(), Vec::new());
             if ctrl_enter {
                 self.set_prompt_mode(ComposerPromptMode::Inactive);
             }
             return Some((
                 InputResult::PromptSubmitted {
-                    text,
+                    text: prompt_input.text,
+                    history_text: raw_text,
                     // Ctrl+Enter always leaves Prompt mode; plain Enter continues the isolated
                     // thread and lets App decide whether this is the first or a later turn.
                     submit: ctrl_enter,
                     mode,
+                    optimization_mode: prompt_input.optimization_mode,
                 },
                 true,
             ));
@@ -3293,6 +3308,7 @@ impl ChatComposer {
         {
             // # 仅作为空草稿的模式入口，不写入正文；side 子线程存在时由 App 关闭该能力，
             // 因此同一个字符在那个场景下仍会按普通文本插入。
+            self.set_prompt_optimization_mode(PromptOptimizationMode::Full);
             self.set_prompt_mode(ComposerPromptMode::Hash);
             self.draft.textarea.enter_vim_insert_mode();
             return (InputResult::None, true);
@@ -4857,8 +4873,10 @@ mod tests {
             result,
             InputResult::PromptSubmitted {
                 text: "/diff inspect this".to_string(),
+                history_text: "/diff inspect this".to_string(),
                 submit: false,
                 mode: ComposerPromptMode::Hash,
+                optimization_mode: PromptOptimizationMode::Full,
             }
         );
         assert_eq!(composer.prompt_mode(), ComposerPromptMode::Hash);
@@ -4907,8 +4925,100 @@ mod tests {
             result,
             InputResult::PromptSubmitted {
                 text: "send this normally".to_string(),
+                history_text: "send this normally".to_string(),
                 submit: true,
                 mode: ComposerPromptMode::Hash,
+                optimization_mode: PromptOptimizationMode::Full,
+            }
+        );
+        assert_eq!(composer.prompt_mode(), ComposerPromptMode::Inactive);
+    }
+
+    #[test]
+    fn hash_prompt_parameters_are_removed_before_submission() {
+        let (mut composer, _rx) = new_prompt_test_composer();
+        composer.set_prompt_mode(ComposerPromptMode::Hash);
+        composer.insert_str("make this precise --fast");
+
+        let (result, _needs_redraw) =
+            composer.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+        assert_eq!(
+            result,
+            InputResult::PromptSubmitted {
+                text: "make this precise".to_string(),
+                history_text: "make this precise --fast".to_string(),
+                submit: false,
+                mode: ComposerPromptMode::Hash,
+                optimization_mode: PromptOptimizationMode::Fast,
+            }
+        );
+
+        composer.insert_str("keep the same mode");
+        let (result, _needs_redraw) =
+            composer.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+        assert_eq!(
+            result,
+            InputResult::PromptSubmitted {
+                text: "keep the same mode".to_string(),
+                history_text: "keep the same mode".to_string(),
+                submit: false,
+                mode: ComposerPromptMode::Hash,
+                optimization_mode: PromptOptimizationMode::Fast,
+            }
+        );
+    }
+
+    #[test]
+    fn prompt_thread_parameter_can_switch_optimization_mode() {
+        let (mut composer, _rx) = new_prompt_test_composer();
+        composer.set_prompt_mode(ComposerPromptMode::Thread);
+        composer.set_prompt_optimization_mode(PromptOptimizationMode::Fast);
+        composer.insert_str("expand the details --full");
+
+        let (result, _needs_redraw) =
+            composer.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+        assert_eq!(
+            result,
+            InputResult::PromptSubmitted {
+                text: "expand the details".to_string(),
+                history_text: "expand the details --full".to_string(),
+                submit: false,
+                mode: ComposerPromptMode::Thread,
+                optimization_mode: PromptOptimizationMode::Full,
+            }
+        );
+
+        composer.insert_str("continue with full mode");
+        let (result, _needs_redraw) =
+            composer.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+        assert_eq!(
+            result,
+            InputResult::PromptSubmitted {
+                text: "continue with full mode".to_string(),
+                history_text: "continue with full mode".to_string(),
+                submit: false,
+                mode: ComposerPromptMode::Thread,
+                optimization_mode: PromptOptimizationMode::Full,
+            }
+        );
+    }
+
+    #[test]
+    fn hash_ctrl_enter_consumes_prompt_parameter_before_normal_submission() {
+        let (mut composer, _rx) = new_prompt_test_composer();
+        composer.set_prompt_mode(ComposerPromptMode::Hash);
+        composer.insert_str("send this normally --fast");
+
+        let (result, _needs_redraw) =
+            composer.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::CONTROL));
+        assert_eq!(
+            result,
+            InputResult::PromptSubmitted {
+                text: "send this normally".to_string(),
+                history_text: "send this normally --fast".to_string(),
+                submit: true,
+                mode: ComposerPromptMode::Hash,
+                optimization_mode: PromptOptimizationMode::Fast,
             }
         );
         assert_eq!(composer.prompt_mode(), ComposerPromptMode::Inactive);
@@ -4926,8 +5036,10 @@ mod tests {
             result,
             InputResult::PromptSubmitted {
                 text: "clarify the requirements".to_string(),
+                history_text: "clarify the requirements".to_string(),
                 submit: false,
                 mode: ComposerPromptMode::Thread,
+                optimization_mode: PromptOptimizationMode::Full,
             }
         );
         assert_eq!(composer.prompt_mode(), ComposerPromptMode::Thread);
@@ -4939,8 +5051,10 @@ mod tests {
             result,
             InputResult::PromptSubmitted {
                 text: "final optimized prompt".to_string(),
+                history_text: "final optimized prompt".to_string(),
                 submit: true,
                 mode: ComposerPromptMode::Thread,
+                optimization_mode: PromptOptimizationMode::Full,
             }
         );
         assert_eq!(composer.prompt_mode(), ComposerPromptMode::Inactive);

@@ -1971,13 +1971,20 @@ impl App {
                     .handle_start_side(tui, app_server, parent_thread_id, user_message)
                     .await;
             }
-            AppEvent::StartPrompt { text } => {
-                self.handle_start_prompt(tui, app_server, text).await?;
+            AppEvent::StartPrompt {
+                text,
+                history_text,
+                optimization_mode,
+            } => {
+                self.handle_start_prompt(tui, app_server, text, history_text, optimization_mode)
+                    .await?;
             }
-            AppEvent::ContinuePrompt { text } => {
-                if self.is_active_prompt_thread() {
-                    self.chat_widget.submit_user_message_text(text);
-                }
+            AppEvent::ContinuePrompt {
+                text,
+                optimization_mode,
+            } => {
+                self.continue_prompt(app_server, text, optimization_mode)
+                    .await?;
             }
             AppEvent::CancelPrompt => {
                 self.cancel_prompt(tui, app_server).await?;

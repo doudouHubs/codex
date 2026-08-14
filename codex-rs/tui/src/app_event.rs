@@ -38,6 +38,7 @@ use codex_utils_approval_presets::ApprovalPreset;
 use crate::app_command::AppCommand;
 use crate::app_server_session::AppServerStartedThread;
 use crate::bottom_pane::ApprovalRequest;
+use crate::bottom_pane::PromptOptimizationMode;
 use crate::bottom_pane::StatusLineItem;
 use crate::bottom_pane::TerminalTitleItem;
 use crate::chatwidget::UserMessage;
@@ -161,11 +162,14 @@ pub(crate) enum AppEvent {
     /// Start an isolated prompt-optimization thread from the current main-thread draft.
     StartPrompt {
         text: String,
+        history_text: String,
+        optimization_mode: PromptOptimizationMode,
     },
 
     /// Submit another prompt to the active isolated prompt-optimization thread.
     ContinuePrompt {
         text: String,
+        optimization_mode: PromptOptimizationMode,
     },
 
     /// Cancel the active isolated prompt-optimization thread and restore the main draft.

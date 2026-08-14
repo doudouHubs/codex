@@ -6,6 +6,7 @@
 
 use super::*;
 use crate::bottom_pane::ComposerPromptMode;
+use crate::bottom_pane::PromptOptimizationMode;
 
 impl ChatWidget {
     pub(crate) fn submit_user_message_as_plain_user_turn(
@@ -39,6 +40,10 @@ impl ChatWidget {
 
     pub(crate) fn set_prompt_mode(&mut self, mode: ComposerPromptMode) {
         self.bottom_pane.set_prompt_mode(mode);
+    }
+
+    pub(crate) fn set_prompt_optimization_mode(&mut self, mode: PromptOptimizationMode) {
+        self.bottom_pane.set_prompt_optimization_mode(mode);
     }
 
     pub(crate) fn set_prompt_mode_available(&mut self, available: bool) {

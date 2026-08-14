@@ -69,13 +69,23 @@ impl ChatWidget {
                 let user_message = self.user_message_from_submission(text, text_elements);
                 self.queue_user_message_with_options(user_message, action, pending_pastes);
             }
-            InputResult::PromptSubmitted { text, submit, mode } => {
+            InputResult::PromptSubmitted {
+                text,
+                history_text,
+                submit,
+                mode,
+                optimization_mode,
+            } => {
                 if text.trim().is_empty() {
                     return;
                 }
                 match (mode, submit) {
                     (ComposerPromptMode::Hash, false) => {
-                        self.app_event_tx.send(AppEvent::StartPrompt { text });
+                        self.app_event_tx.send(AppEvent::StartPrompt {
+                            text,
+                            history_text,
+                            optimization_mode,
+                        });
                     }
                     (ComposerPromptMode::Hash, true) => {
                         // Ctrl+Enter in the entry mode intentionally bypasses optimization and
@@ -90,7 +100,10 @@ impl ChatWidget {
                         return;
                     }
                     (ComposerPromptMode::Thread, false) => {
-                        self.app_event_tx.send(AppEvent::ContinuePrompt { text });
+                        self.app_event_tx.send(AppEvent::ContinuePrompt {
+                            text,
+                            optimization_mode,
+                        });
                     }
                     (ComposerPromptMode::Thread, true) => {
                         self.app_event_tx

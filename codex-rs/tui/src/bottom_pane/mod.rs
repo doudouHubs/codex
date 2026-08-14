@@ -190,6 +190,7 @@ pub(crate) use chat_composer::ComposerPromptMode;
 pub(crate) use chat_composer::InputResult;
 pub(crate) use chat_composer::QueuedInputAction;
 pub(crate) use chat_composer_history::HistoryEntry;
+pub(crate) use prompt_args::PromptOptimizationMode;
 
 use crate::status_indicator_widget::StatusDetailsCapitalization;
 use crate::status_indicator_widget::StatusIndicatorWidget;
@@ -844,6 +845,10 @@ impl BottomPane {
     pub(crate) fn set_prompt_mode(&mut self, mode: ComposerPromptMode) {
         self.composer.set_prompt_mode(mode);
         self.request_redraw();
+    }
+
+    pub(crate) fn set_prompt_optimization_mode(&mut self, mode: PromptOptimizationMode) {
+        self.composer.set_prompt_optimization_mode(mode);
     }
 
     pub(crate) fn set_prompt_mode_available(&mut self, available: bool) {
