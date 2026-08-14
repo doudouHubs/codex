@@ -810,6 +810,17 @@ impl ChatComposer {
             return Some((InputResult::PromptCancelled { mode }, true));
         }
 
+        if mode == ComposerPromptMode::Hash
+            && key_event.code == KeyCode::Backspace
+            && self.draft.textarea.cursor() == 0
+            && matches!(key_event.kind, KeyEventKind::Press | KeyEventKind::Repeat)
+        {
+            // `#` 是吸收的虚拟前缀，光标退回入口位置时应像 Shell mode 的 `!` 一样被删除，
+            // 而不是把 Backspace 交给空文本编辑器后继续停留在 Prompt 模式。
+            self.set_prompt_mode(ComposerPromptMode::Inactive);
+            return Some((InputResult::None, true));
+        }
+
         let ctrl_enter = key_event.code == KeyCode::Enter
             && key_event.modifiers.contains(KeyModifiers::CONTROL)
             && matches!(key_event.kind, KeyEventKind::Press | KeyEventKind::Repeat);
@@ -3267,17 +3278,17 @@ impl ChatComposer {
                     modifiers,
                     kind: KeyEventKind::Press | KeyEventKind::Repeat,
                     ..
-                } if modifiers.is_empty() || modifiers == KeyModifiers::SHIFT
+                } if modifiers.is_empty() || modifiers.contains(KeyModifiers::SHIFT)
             ) || matches!(
                 key_event,
                 KeyEvent {
                     // Windows console and some terminal keyboard protocols report Shift+3 as the
                     // physical digit plus SHIFT instead of the resolved '#' character.
                     code: KeyCode::Char('3'),
-                    modifiers: KeyModifiers::SHIFT,
+                    modifiers,
                     kind: KeyEventKind::Press | KeyEventKind::Repeat,
                     ..
-                }
+                } if modifiers.contains(KeyModifiers::SHIFT)
             ))
         {
             // # 仅作为空草稿的模式入口，不写入正文；side 子线程存在时由 App 关闭该能力，
@@ -3380,6 +3391,12 @@ impl ChatComposer {
         self.is_bang_shell_command()
             .then_some(())
             .map(|_| Line::from(vec![Span::from("Shell mode").light_red()]))
+    }
+
+    fn prompt_mode_footer_line(&self) -> Option<Line<'static>> {
+        (self.prompt_mode != ComposerPromptMode::Inactive)
+            .then_some(())
+            .map(|_| Line::from(vec![Span::from("Prompt mode").light_red()]))
     }
 
     /// Applies any due `PasteBurst` flush at time `now`.
@@ -4547,6 +4564,8 @@ impl ChatComposer {
                             Some(side_conversation_context_line(label))
                         } else if let Some(line) = self.shell_mode_footer_line() {
                             Some(line)
+                        } else if let Some(line) = self.prompt_mode_footer_line() {
+                            Some(line)
                         } else if status_line_active {
                             let full = self.mode_indicator_line(show_cycle_hint);
                             let compact = self.mode_indicator_line(/*show_cycle_hint*/ false);
@@ -4689,7 +4708,11 @@ impl ChatComposer {
         }
         if !textarea_rect.is_empty() {
             let prompt = if self.draft.input_enabled {
-                if self.draft.is_bash_mode {
+                // `#` 是被吸收的 Prompt 入口标记，只在首次提交前占据左侧 marker；进入隔离
+                // 子线程后恢复默认箭头，模式状态统一由右下角 footer 展示。
+                if self.prompt_mode == ComposerPromptMode::Hash {
+                    Span::from("#").light_red().bold()
+                } else if self.draft.is_bash_mode {
                     Span::from("!").light_red().bold()
                 } else {
                     "›".bold()
@@ -4706,7 +4729,9 @@ impl ChatComposer {
         }
 
         let mut state = self.draft.textarea_state.borrow_mut();
-        let textarea_is_empty = self.draft.textarea.text().is_empty() && !self.draft.is_bash_mode;
+        let textarea_is_empty = self.draft.textarea.text().is_empty()
+            && !self.draft.is_bash_mode
+            && self.prompt_mode != ComposerPromptMode::Hash;
         if self.draft.input_enabled {
             if let Some(mask_char) = mask_char {
                 self.draft
@@ -4854,6 +4879,20 @@ mod tests {
             assert_eq!(composer.prompt_mode(), ComposerPromptMode::Hash);
             assert_eq!(composer.current_text(), "");
         }
+    }
+
+    #[test]
+    fn hash_mode_backspace_exits_at_virtual_prefix() {
+        let (mut composer, _rx) = new_prompt_test_composer();
+
+        let _ = composer.handle_key_event(KeyEvent::new(KeyCode::Char('#'), KeyModifiers::NONE));
+        let (result, needs_redraw) =
+            composer.handle_key_event(KeyEvent::new(KeyCode::Backspace, KeyModifiers::NONE));
+
+        assert_eq!(result, InputResult::None);
+        assert!(needs_redraw);
+        assert_eq!(composer.prompt_mode(), ComposerPromptMode::Inactive);
+        assert_eq!(composer.current_text(), "");
     }
 
     #[test]
@@ -5297,6 +5336,23 @@ mod tests {
                 )));
                 composer.set_text_content("!".to_string(), Vec::new(), Vec::new());
                 let _ = composer.handle_key_event(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
+            },
+        );
+    }
+
+    #[test]
+    fn prompt_mode_snapshot() {
+        use crossterm::event::KeyCode;
+        use crossterm::event::KeyEvent;
+        use crossterm::event::KeyModifiers;
+
+        // `#` 被消费为模式前缀，左侧 marker 和右下角模式提示应与 Shell mode 对齐。
+        snapshot_composer_state(
+            "prompt_mode",
+            /*enhanced_keys_supported*/ true,
+            |composer| {
+                let _ = composer
+                    .handle_key_event(KeyEvent::new(KeyCode::Char('#'), KeyModifiers::NONE));
             },
         );
     }
