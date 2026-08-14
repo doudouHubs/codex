@@ -80,6 +80,10 @@ impl ElicitationReviewer for GuardianMcpElicitationReviewer {
 
 impl Session {
     pub(crate) async fn runtime_mcp_config(&self, config: &Config) -> McpConfig {
+        if self.mcp_runtime_mode == McpRuntimeMode::Disabled {
+            return self.services.latest_mcp_runtime().config().clone();
+        }
+
         let originator = self.originator().await;
         let environments = self.services.turn_environments.snapshot().await;
         let selected_capability_roots = self
@@ -118,6 +122,11 @@ impl Session {
         environments: &TurnEnvironmentSnapshot,
         selected_capability_roots: &[ResolvedSelectedCapabilityRoot],
     ) -> Arc<McpRuntimeSnapshot> {
+        if self.mcp_runtime_mode == McpRuntimeMode::Disabled {
+            // 禁用线程的空 runtime 是固定策略，不能因环境或配置变化重新投影 MCP。
+            return self.services.latest_mcp_runtime();
+        }
+
         let ready_selected_capability_roots =
             Self::ready_selected_capability_roots(selected_capability_roots);
         let available_environment_ids =
@@ -456,6 +465,10 @@ impl Session {
         turn_context: &TurnContext,
         elicitation_reviewer: Option<ElicitationReviewerHandle>,
     ) {
+        if self.mcp_runtime_mode == McpRuntimeMode::Disabled {
+            return;
+        }
+
         let refresh_config = { self.pending_mcp_server_refresh_config.lock().await.take() };
         let Some(refresh_config) = refresh_config else {
             return;
@@ -540,6 +553,11 @@ impl Session {
         &self,
         supported: bool,
     ) -> anyhow::Result<()> {
+        if self.mcp_runtime_mode == McpRuntimeMode::Disabled {
+            // 禁用线程不拥有 MCP runtime，能力协商也不能留下待执行的刷新配置。
+            return Ok(());
+        }
+
         if self
             .services
             .supports_openai_form_elicitation
@@ -574,6 +592,10 @@ impl Session {
         refresh_config: &Config,
         elicitation_reviewer: Option<ElicitationReviewerHandle>,
     ) {
+        if self.mcp_runtime_mode == McpRuntimeMode::Disabled {
+            return;
+        }
+
         let _guard = self.services.mcp_projection_lock.lock().await;
         let current_runtime = self.services.latest_mcp_runtime();
         let ready_selected_capability_roots =

@@ -401,6 +401,18 @@ pub(crate) struct SessionIo {
 
 pub(crate) type SessionLoopTermination = Shared<BoxFuture<'static, ()>>;
 
+/// Controls whether a thread owns a live MCP runtime.
+///
+/// This is thread-scoped rather than a [`Config`] setting so temporary forked
+/// threads can suppress MCP without changing the parent thread or global user
+/// configuration.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub(crate) enum McpRuntimeMode {
+    #[default]
+    Enabled,
+    Disabled,
+}
+
 pub(crate) struct SessionSpawnArgs {
     pub(crate) config: Config,
     pub(crate) allow_provider_model_fallback: bool,
@@ -412,6 +424,7 @@ pub(crate) struct SessionSpawnArgs {
     pub(crate) skills_service: Arc<SkillsService>,
     pub(crate) plugins_manager: Arc<PluginsManager>,
     pub(crate) mcp_manager: Arc<McpManager>,
+    pub(crate) mcp_runtime_mode: McpRuntimeMode,
     pub(crate) code_mode_session_provider: Arc<dyn codex_code_mode::CodeModeSessionProvider>,
     pub(crate) extensions: Arc<codex_extension_api::ExtensionRegistry<crate::config::Config>>,
     pub(crate) conversation_history: InitialHistory,
@@ -504,6 +517,7 @@ impl Session {
             skills_service,
             plugins_manager,
             mcp_manager,
+            mcp_runtime_mode,
             code_mode_session_provider,
             extensions,
             conversation_history,
@@ -687,6 +701,7 @@ impl Session {
             skills_service,
             plugins_manager,
             mcp_manager.clone(),
+            mcp_runtime_mode,
             code_mode_session_provider,
             extensions,
             thread_extension_init,

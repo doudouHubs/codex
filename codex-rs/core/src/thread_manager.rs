@@ -11,6 +11,7 @@ use crate::environment_selection::default_thread_environment_selections;
 use crate::mcp::McpManager;
 use crate::rollout::truncation;
 use crate::session::INITIAL_SUBMIT_ID;
+use crate::session::McpRuntimeMode;
 use crate::session::SessionIo;
 use crate::session::SessionSpawnArgs;
 use crate::session::resolve_multi_agent_version;
@@ -734,6 +735,7 @@ impl ThreadManager {
             options.thread_extension_init,
             options.supports_openai_form_elicitation,
             /*user_shell_override*/ None,
+            McpRuntimeMode::Enabled,
         ))
         .await
     }
@@ -840,6 +842,7 @@ impl ThreadManager {
             /*thread_extension_init*/ ExtensionDataInit::default(),
             supports_openai_form_elicitation,
             /*user_shell_override*/ None,
+            McpRuntimeMode::Enabled,
         ))
         .await
     }
@@ -913,6 +916,7 @@ impl ThreadManager {
             /*thread_extension_init*/ ExtensionDataInit::default(),
             supports_openai_form_elicitation,
             /*user_shell_override*/ Some(user_shell_override),
+            McpRuntimeMode::Enabled,
         ))
         .await
     }
@@ -1034,6 +1038,56 @@ impl ThreadManager {
     where
         S: Into<ForkSnapshot>,
     {
+        self.fork_thread_from_history_with_mcp_mode(
+            snapshot,
+            config,
+            history,
+            thread_source,
+            parent_trace,
+            supports_openai_form_elicitation,
+            McpRuntimeMode::Enabled,
+        )
+        .await
+    }
+
+    /// Fork an existing thread without loading or exposing MCP capabilities.
+    pub async fn fork_thread_from_history_without_mcp<S>(
+        &self,
+        snapshot: S,
+        config: Config,
+        history: InitialHistory,
+        thread_source: Option<ThreadSource>,
+        parent_trace: Option<W3cTraceContext>,
+        supports_openai_form_elicitation: bool,
+    ) -> CodexResult<NewThread>
+    where
+        S: Into<ForkSnapshot>,
+    {
+        self.fork_thread_from_history_with_mcp_mode(
+            snapshot,
+            config,
+            history,
+            thread_source,
+            parent_trace,
+            supports_openai_form_elicitation,
+            McpRuntimeMode::Disabled,
+        )
+        .await
+    }
+
+    async fn fork_thread_from_history_with_mcp_mode<S>(
+        &self,
+        snapshot: S,
+        config: Config,
+        history: InitialHistory,
+        thread_source: Option<ThreadSource>,
+        parent_trace: Option<W3cTraceContext>,
+        supports_openai_form_elicitation: bool,
+        mcp_runtime_mode: McpRuntimeMode,
+    ) -> CodexResult<NewThread>
+    where
+        S: Into<ForkSnapshot>,
+    {
         self.fork_thread_with_initial_history(
             snapshot.into(),
             config,
@@ -1041,6 +1095,7 @@ impl ThreadManager {
             thread_source,
             parent_trace,
             supports_openai_form_elicitation,
+            mcp_runtime_mode,
         )
         .await
     }
@@ -1053,6 +1108,7 @@ impl ThreadManager {
         thread_source: Option<ThreadSource>,
         parent_trace: Option<W3cTraceContext>,
         supports_openai_form_elicitation: bool,
+        mcp_runtime_mode: McpRuntimeMode,
     ) -> CodexResult<NewThread> {
         // `forked_from_id()` describes this history's existing lineage. When
         // forking a resumed thread, the child copies the resumed thread itself.
@@ -1080,21 +1136,27 @@ impl ThreadManager {
             &config.workspace_roots,
         );
         let agent_control = self.agent_control_for_config(&config);
-        Box::pin(self.state.spawn_thread(
+        Box::pin(self.state.spawn_thread_with_source(
             config,
             history,
+            /*history_mode*/ None,
+            /*allow_provider_model_fallback*/ false,
             Arc::clone(&self.state.auth_manager),
             agent_control,
+            self.state.session_source.clone(),
             /*parent_thread_id*/ None,
             source_thread_id,
             thread_source,
             Vec::new(),
             /*metrics_service_name*/ None,
+            /*inherited_environments*/ None,
+            /*inherited_exec_policy*/ None,
             parent_trace,
             environments,
             /*thread_extension_init*/ ExtensionDataInit::default(),
             supports_openai_form_elicitation,
             /*user_shell_override*/ None,
+            mcp_runtime_mode,
         ))
         .await
     }
@@ -1443,6 +1505,7 @@ impl ThreadManagerState {
             /*thread_extension_init*/ ExtensionDataInit::default(),
             /*supports_openai_form_elicitation*/ false,
             /*user_shell_override*/ None,
+            McpRuntimeMode::Enabled,
         ))
         .await
     }
@@ -1486,6 +1549,7 @@ impl ThreadManagerState {
             /*thread_extension_init*/ ExtensionDataInit::default(),
             /*supports_openai_form_elicitation*/ false,
             /*user_shell_override*/ None,
+            McpRuntimeMode::Enabled,
         ))
         .await
     }
@@ -1533,6 +1597,7 @@ impl ThreadManagerState {
             thread_extension_init,
             /*supports_openai_form_elicitation*/ false,
             /*user_shell_override*/ None,
+            McpRuntimeMode::Enabled,
         ))
         .await
     }
@@ -1576,6 +1641,7 @@ impl ThreadManagerState {
             thread_extension_init,
             supports_openai_form_elicitation,
             user_shell_override,
+            McpRuntimeMode::Enabled,
         ))
         .await
     }
@@ -1602,6 +1668,7 @@ impl ThreadManagerState {
         thread_extension_init: ExtensionDataInit,
         supports_openai_form_elicitation: bool,
         user_shell_override: Option<crate::shell::Shell>,
+        mcp_runtime_mode: McpRuntimeMode,
     ) -> CodexResult<NewThread> {
         let is_resumed_thread = matches!(&initial_history, InitialHistory::Resumed(_));
         if let InitialHistory::Resumed(resumed) = &initial_history {
@@ -1660,6 +1727,7 @@ impl ThreadManagerState {
             skills_service: Arc::clone(&self.skills_service),
             plugins_manager: Arc::clone(&self.plugins_manager),
             mcp_manager: Arc::clone(&self.mcp_manager),
+            mcp_runtime_mode,
             code_mode_session_provider: Arc::clone(&self.code_mode_session_provider),
             extensions: Arc::clone(&self.extensions),
             conversation_history: initial_history,

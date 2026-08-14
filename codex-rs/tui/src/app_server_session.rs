@@ -143,6 +143,12 @@ pub(crate) enum ForkGoalContinuation {
     DeferUntilNextTurn,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum ForkMcpMode {
+    Enabled,
+    Disabled,
+}
+
 fn bootstrap_request_error(context: &'static str, err: TypedRequestError) -> color_eyre::Report {
     color_eyre::eyre::eyre!("{context}: {err}")
 }
@@ -537,12 +543,29 @@ impl AppServerSession {
         config: Config,
         thread_id: ThreadId,
     ) -> Result<AppServerStartedThread> {
-        self.fork_thread_at(
+        self.fork_thread_at_with_mcp_mode(
             config,
             thread_id,
             /*last_turn_id*/ None,
             /*before_turn_id*/ None,
             ForkGoalContinuation::StartIfIdle,
+            ForkMcpMode::Enabled,
+        )
+        .await
+    }
+
+    pub(crate) async fn fork_thread_without_mcp(
+        &mut self,
+        config: Config,
+        thread_id: ThreadId,
+    ) -> Result<AppServerStartedThread> {
+        self.fork_thread_at_with_mcp_mode(
+            config,
+            thread_id,
+            /*last_turn_id*/ None,
+            /*before_turn_id*/ None,
+            ForkGoalContinuation::StartIfIdle,
+            ForkMcpMode::Disabled,
         )
         .await
     }
@@ -555,6 +578,26 @@ impl AppServerSession {
         before_turn_id: Option<String>,
         goal_continuation: ForkGoalContinuation,
     ) -> Result<AppServerStartedThread> {
+        self.fork_thread_at_with_mcp_mode(
+            config,
+            thread_id,
+            last_turn_id,
+            before_turn_id,
+            goal_continuation,
+            ForkMcpMode::Enabled,
+        )
+        .await
+    }
+
+    async fn fork_thread_at_with_mcp_mode(
+        &mut self,
+        config: Config,
+        thread_id: ThreadId,
+        last_turn_id: Option<String>,
+        before_turn_id: Option<String>,
+        goal_continuation: ForkGoalContinuation,
+        mcp_mode: ForkMcpMode,
+    ) -> Result<AppServerStartedThread> {
         let request_id = self.next_request_id();
         let session_config = self.session_config_with_effective_service_tier(&config);
         let response: ThreadForkResponse = self
@@ -566,6 +609,7 @@ impl AppServerSession {
                     before_turn_id,
                     defer_goal_continuation: goal_continuation
                         == ForkGoalContinuation::DeferUntilNextTurn,
+                    disable_mcp: mcp_mode == ForkMcpMode::Disabled,
                     ..thread_fork_params_from_config(
                         session_config,
                         thread_id,

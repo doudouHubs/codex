@@ -249,7 +249,7 @@ impl App {
             .primary_thread_id
             .expect("prompt start requires main thread");
         let forked = match app_server
-            .fork_thread(self.prompt_fork_config(), parent_thread_id)
+            .fork_thread_without_mcp(self.prompt_fork_config(), parent_thread_id)
             .await
         {
             Ok(forked) => forked,

@@ -10,6 +10,7 @@ use tracing::Instrument;
 use tracing::debug_span;
 use tracing::info_span;
 
+use crate::session::McpRuntimeMode;
 use crate::session::SteerInputError;
 use crate::session::TurnInput;
 use crate::session::session::Session;
@@ -443,6 +444,11 @@ pub async fn dynamic_tool_response(sess: &Arc<Session>, id: String, response: Dy
 }
 
 pub async fn refresh_mcp_servers(sess: &Arc<Session>, refresh_config: McpServerRefreshConfig) {
+    if sess.mcp_runtime_mode == McpRuntimeMode::Disabled {
+        // 禁用线程没有 MCP runtime，不能把外部刷新请求暂存到后续 turn。
+        return;
+    }
+
     let mut guard = sess.pending_mcp_server_refresh_config.lock().await;
     *guard = Some(refresh_config);
 }

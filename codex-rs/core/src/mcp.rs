@@ -12,6 +12,7 @@ use codex_extension_api::ExtensionDataInit;
 use codex_extension_api::ExtensionRegistry;
 use codex_extension_api::McpServerContribution;
 use codex_extension_api::McpServerContributionContext;
+use codex_features::Feature;
 use codex_login::CodexAuth;
 use codex_mcp::CODEX_APPS_MCP_SERVER_NAME;
 use codex_mcp::EffectiveMcpServer;
@@ -19,12 +20,14 @@ use codex_mcp::McpConfig;
 use codex_mcp::McpPluginAttribution;
 use codex_mcp::McpServerRegistration;
 use codex_mcp::McpToolCatalogCache;
+use codex_mcp::ResolvedMcpCatalog;
 use codex_mcp::ToolInfo;
 use codex_mcp::codex_apps_mcp_server_config;
 use codex_mcp::configured_mcp_servers;
 use codex_mcp::effective_mcp_servers;
 use codex_plugin::AppConnectorId;
 use codex_protocol::capabilities::SelectedCapabilityRoot;
+use rmcp::model::ElicitationCapability;
 
 const LEGACY_CODEX_APPS_REGISTRATION_ID: &str = "legacy_codex_apps";
 
@@ -32,6 +35,34 @@ const LEGACY_CODEX_APPS_REGISTRATION_ID: &str = "legacy_codex_apps";
 pub(crate) struct McpRuntimeProjection {
     pub(crate) config: McpConfig,
     pub(crate) plugins_available: bool,
+}
+
+/// 为不加载 MCP 的临时线程创建空 runtime，避免读取 MCP server、插件或扩展 overlay。
+pub(crate) fn empty_mcp_runtime_projection(config: &Config) -> McpRuntimeProjection {
+    McpRuntimeProjection {
+        config: McpConfig {
+            chatgpt_base_url: config.chatgpt_base_url.clone(),
+            apps_mcp_product_sku: config.apps_mcp_product_sku.clone(),
+            codex_home: config.codex_home.to_path_buf(),
+            mcp_oauth_credentials_store_mode: config.mcp_oauth_credentials_store_mode,
+            auth_keyring_backend_kind: config.auth_keyring_backend_kind(),
+            mcp_oauth_callback_port: config.mcp_oauth_callback_port,
+            mcp_oauth_callback_url: config.mcp_oauth_callback_url.clone(),
+            skill_mcp_dependency_install_enabled: config
+                .features
+                .enabled(Feature::SkillMcpDependencyInstall),
+            approval_policy: config.permissions.approval_policy.clone(),
+            codex_linux_sandbox_exe: config.codex_linux_sandbox_exe.clone(),
+            use_legacy_landlock: config.features.use_legacy_landlock(),
+            // Apps MCP 是兼容内置 server，禁用线程不能通过它间接获得 connector 能力。
+            apps_enabled: false,
+            prefix_mcp_tool_names: config.prefix_mcp_tool_names(),
+            client_elicitation_capability: ElicitationCapability::default(),
+            mcp_server_catalog: ResolvedMcpCatalog::default(),
+            connector_snapshot: ConnectorSnapshot::default(),
+        },
+        plugins_available: false,
+    }
 }
 
 enum OrderedMcpOverlay {

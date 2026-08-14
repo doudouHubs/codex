@@ -3,6 +3,7 @@ use crate::compact::InitialContextInjection;
 use crate::exec_policy::ExecPolicyManager;
 use crate::guardian::GUARDIAN_REVIEWER_NAME;
 use crate::sandboxing::SandboxPermissions;
+use crate::session::McpRuntimeMode;
 use crate::session::step_context::StepContext;
 use crate::test_support::models_manager_with_provider;
 use crate::tools::context::ToolCallSource;
@@ -735,6 +736,7 @@ async fn guardian_subagent_does_not_inherit_parent_exec_policy_rules() {
         skills_service,
         plugins_manager,
         mcp_manager,
+        mcp_runtime_mode: McpRuntimeMode::Enabled,
         code_mode_session_provider: Arc::new(codex_code_mode::InProcessCodeModeSessionProvider),
         extensions: codex_extension_api::empty_extension_registry(),
         conversation_history: InitialHistory::New,

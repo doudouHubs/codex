@@ -587,6 +587,10 @@ pub struct ThreadForkParams {
     #[experimental("thread/fork.deferGoalContinuation")]
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub defer_goal_continuation: bool,
+    /// 当为 true 时，fork 出来的线程不会加载或暴露任何 MCP 能力。
+    #[experimental("thread/fork.disableMcp")]
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub disable_mcp: bool,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS, ExperimentalApi)]

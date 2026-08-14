@@ -3728,6 +3728,7 @@ impl ThreadRequestProcessor {
             thread_source,
             exclude_turns,
             defer_goal_continuation,
+            disable_mcp,
         } = params;
         let include_turns = !exclude_turns;
         if sandbox.is_some() && permissions.is_some() {
@@ -3834,33 +3835,50 @@ impl ThreadRequestProcessor {
 
         let fallback_model_provider = config.model_provider_id.clone();
 
+        // side/Prompt 通过该协议标记走禁用 MCP 的线程级启动路径，普通 fork 保持原行为。
+        let fork_result = if disable_mcp {
+            self.thread_manager
+                .fork_thread_from_history_without_mcp(
+                    ForkSnapshot::Interrupted,
+                    config,
+                    InitialHistory::Resumed(ResumedHistory {
+                        conversation_id: source_thread_id,
+                        history: Arc::clone(&history_items),
+                        rollout_path: source_thread.rollout_path.clone(),
+                    }),
+                    thread_source.map(Into::into),
+                    self.request_trace_context(&request_id).await,
+                    supports_openai_form_elicitation,
+                )
+                .await
+        } else {
+            self.thread_manager
+                .fork_thread_from_history(
+                    ForkSnapshot::Interrupted,
+                    config,
+                    InitialHistory::Resumed(ResumedHistory {
+                        conversation_id: source_thread_id,
+                        history: Arc::clone(&history_items),
+                        rollout_path: source_thread.rollout_path.clone(),
+                    }),
+                    thread_source.map(Into::into),
+                    self.request_trace_context(&request_id).await,
+                    supports_openai_form_elicitation,
+                )
+                .await
+        };
         let NewThread {
             thread_id,
             thread: forked_thread,
             session_configured,
             ..
-        } = self
-            .thread_manager
-            .fork_thread_from_history(
-                ForkSnapshot::Interrupted,
-                config,
-                InitialHistory::Resumed(ResumedHistory {
-                    conversation_id: source_thread_id,
-                    history: Arc::clone(&history_items),
-                    rollout_path: source_thread.rollout_path.clone(),
-                }),
-                thread_source.map(Into::into),
-                self.request_trace_context(&request_id).await,
-                supports_openai_form_elicitation,
-            )
-            .await
-            .map_err(|err| match err {
-                CodexErr::Io(_) | CodexErr::Json(_) => {
-                    invalid_request(format!("failed to load thread {source_thread_id}: {err}"))
-                }
-                CodexErr::InvalidRequest(message) => invalid_request(message),
-                err => internal_error(format!("error forking thread: {err}")),
-            })?;
+        } = fork_result.map_err(|err| match err {
+            CodexErr::Io(_) | CodexErr::Json(_) => {
+                invalid_request(format!("failed to load thread {source_thread_id}: {err}"))
+            }
+            CodexErr::InvalidRequest(message) => invalid_request(message),
+            err => internal_error(format!("error forking thread: {err}")),
+        })?;
 
         Self::set_app_server_client_info(
             forked_thread.as_ref(),

@@ -44,6 +44,7 @@ pub(crate) struct Session {
     pub(crate) input_queue: InputQueue,
     pub(crate) guardian_review_session: GuardianReviewSessionManager,
     pub(crate) services: SessionServices,
+    pub(crate) mcp_runtime_mode: McpRuntimeMode,
     pub(super) next_internal_sub_id: AtomicU64,
 }
 
@@ -488,6 +489,7 @@ impl Session {
         skills_service: Arc<SkillsService>,
         plugins_manager: Arc<PluginsManager>,
         mcp_manager: Arc<McpManager>,
+        mcp_runtime_mode: McpRuntimeMode,
         code_mode_session_provider: Arc<dyn codex_code_mode::CodeModeSessionProvider>,
         extensions: Arc<codex_extension_api::ExtensionRegistry<crate::config::Config>>,
         mut thread_extension_init: ExtensionDataInit,
@@ -710,18 +712,33 @@ impl Session {
             McpRuntimeContext::new(Arc::clone(&environment_manager), mcp_runtime_cwd);
         let auth_and_mcp_fut = async move {
             let auth = auth_manager_clone.auth().await;
-            let mcp_projection = mcp_manager_for_mcp
-                .runtime_config_for_step(
-                    &config_for_mcp,
-                    mcp_thread_init_for_startup,
-                    thread_extension_data_for_mcp,
-                    &mcp_originator,
-                    /*ready_selected_capability_roots*/ &[],
-                )
-                .await;
-            let mcp_config = &mcp_projection.config;
-            let mcp_servers = codex_mcp::effective_mcp_servers(mcp_config, auth.as_ref());
-            let tool_plugin_provenance = codex_mcp::tool_plugin_provenance(mcp_config);
+            let (mcp_projection, mcp_servers, tool_plugin_provenance) = match mcp_runtime_mode {
+                McpRuntimeMode::Enabled => {
+                    let mcp_projection = mcp_manager_for_mcp
+                        .runtime_config_for_step(
+                            &config_for_mcp,
+                            mcp_thread_init_for_startup,
+                            thread_extension_data_for_mcp,
+                            &mcp_originator,
+                            /*ready_selected_capability_roots*/ &[],
+                        )
+                        .await;
+                    let mcp_config = &mcp_projection.config;
+                    let mcp_servers = codex_mcp::effective_mcp_servers(mcp_config, auth.as_ref());
+                    let tool_plugin_provenance = codex_mcp::tool_plugin_provenance(mcp_config);
+                    (mcp_projection, mcp_servers, tool_plugin_provenance)
+                }
+                McpRuntimeMode::Disabled => {
+                    // side/Prompt 只是临时上下文，不应因启动它们读取 MCP 配置、插件能力或
+                    // 扩展 overlay；这里直接使用空投影，后续 manager 也保持未初始化状态。
+                    let mcp_projection = crate::mcp::empty_mcp_runtime_projection(&config_for_mcp);
+                    (
+                        mcp_projection,
+                        HashMap::new(),
+                        codex_mcp::ToolPluginProvenance::default(),
+                    )
+                }
+            };
             (auth, mcp_projection, mcp_servers, tool_plugin_provenance)
         }
         .instrument(info_span!(
@@ -1167,6 +1184,7 @@ impl Session {
                 input_queue: InputQueue::new(),
                 guardian_review_session: GuardianReviewSessionManager::default(),
                 services,
+                mcp_runtime_mode,
                 next_internal_sub_id: AtomicU64::new(0),
             });
             if let Some(network_policy_decider_session) = network_policy_decider_session {
@@ -1221,40 +1239,50 @@ impl Session {
             let codex_apps_auth_manager =
                 codex_mcp::host_owned_codex_apps_enabled(&mcp_projection.config, auth)
                     .then(|| Arc::clone(&sess.services.auth_manager));
-            let mcp_connection_manager = McpConnectionManager::new(
-                &mcp_servers,
-                config.mcp_oauth_credentials_store_mode,
-                config.auth_keyring_backend_kind(),
-                &session_configuration.approval_policy,
-                INITIAL_SUBMIT_ID.to_owned(),
-                tx_event.clone(),
-                mcp_startup_cancellation_token,
-                session_configuration.permission_profile(),
-                mcp_runtime_context.clone(),
-                config.codex_home.to_path_buf(),
-                sess.services.mcp_manager.codex_apps_tools_cache(),
-                sess.services.mcp_manager.tool_catalog_cache(),
-                connector_runtime_context_key(auth),
-                config.prefix_mcp_tool_names(),
-                mcp_projection
-                    .config
-                    .client_elicitation_capability
-                    .clone(),
-                sess.services
-                    .supports_openai_form_elicitation
-                    .load(std::sync::atomic::Ordering::Relaxed),
-                tool_plugin_provenance,
-                auth,
-                codex_apps_auth_manager,
-                Some(sess.mcp_elicitation_reviewer()),
-                Some(sess.mcp_elicitation_lifecycle()),
-                codex_mcp::ElicitationRequestRouter::default(),
-            )
-            .instrument(info_span!(
-                "session_init.mcp_manager_init",
-                otel.name = "session_init.mcp_manager_init",
-            ))
-            .await;
+            let mcp_connection_manager = match mcp_runtime_mode {
+                McpRuntimeMode::Enabled => McpConnectionManager::new(
+                    &mcp_servers,
+                    config.mcp_oauth_credentials_store_mode,
+                    config.auth_keyring_backend_kind(),
+                    &session_configuration.approval_policy,
+                    INITIAL_SUBMIT_ID.to_owned(),
+                    tx_event.clone(),
+                    mcp_startup_cancellation_token,
+                    session_configuration.permission_profile(),
+                    mcp_runtime_context.clone(),
+                    config.codex_home.to_path_buf(),
+                    sess.services.mcp_manager.codex_apps_tools_cache(),
+                    sess.services.mcp_manager.tool_catalog_cache(),
+                    connector_runtime_context_key(auth),
+                    config.prefix_mcp_tool_names(),
+                    mcp_projection
+                        .config
+                        .client_elicitation_capability
+                        .clone(),
+                    sess.services
+                        .supports_openai_form_elicitation
+                        .load(std::sync::atomic::Ordering::Relaxed),
+                    tool_plugin_provenance,
+                    auth,
+                    codex_apps_auth_manager,
+                    Some(sess.mcp_elicitation_reviewer()),
+                    Some(sess.mcp_elicitation_lifecycle()),
+                    codex_mcp::ElicitationRequestRouter::default(),
+                )
+                .instrument(info_span!(
+                    "session_init.mcp_manager_init",
+                    otel.name = "session_init.mcp_manager_init",
+                ))
+                .await,
+                McpRuntimeMode::Disabled => {
+                    // 禁用线程只保留空 manager，避免构造任何 MCP client 或启动 server 进程。
+                    McpConnectionManager::new_uninitialized_with_permission_profile(
+                        &config.permissions.approval_policy,
+                        config.permissions.permission_profile(),
+                        config.prefix_mcp_tool_names(),
+                    )
+                }
+            };
             sess.services
                 .install_mcp_connection_manager(
                     Arc::new(mcp_projection.config),

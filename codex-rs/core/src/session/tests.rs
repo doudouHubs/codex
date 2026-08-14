@@ -5161,6 +5161,7 @@ async fn session_new_fails_when_zsh_fork_enabled_without_packaged_zsh() {
         skills_service,
         plugins_manager,
         mcp_manager,
+        McpRuntimeMode::Enabled,
         Arc::new(codex_code_mode::InProcessCodeModeSessionProvider),
         Arc::new(codex_extension_api::ExtensionRegistryBuilder::new().build()),
         codex_extension_api::ExtensionDataInit::default(),
@@ -5546,6 +5547,7 @@ async fn make_session_with_config_and_rx(
         skills_service,
         plugins_manager,
         mcp_manager,
+        McpRuntimeMode::Enabled,
         Arc::new(codex_code_mode::InProcessCodeModeSessionProvider),
         Arc::new(codex_extension_api::ExtensionRegistryBuilder::new().build()),
         codex_extension_api::ExtensionDataInit::default(),
@@ -5572,6 +5574,7 @@ async fn make_session_with_history_source_and_agent_control_and_rx(
     initial_history: InitialHistory,
     session_source: SessionSource,
     agent_control: AgentControl,
+    mcp_runtime_mode: McpRuntimeMode,
 ) -> anyhow::Result<(Arc<Session>, async_channel::Receiver<Event>)> {
     let codex_home = tempfile::tempdir().expect("create temp dir");
     let mut config = build_test_config(codex_home.path()).await;
@@ -5653,6 +5656,7 @@ async fn make_session_with_history_source_and_agent_control_and_rx(
         skills_service,
         plugins_manager,
         mcp_manager,
+        mcp_runtime_mode,
         Arc::new(codex_code_mode::InProcessCodeModeSessionProvider),
         Arc::new(codex_extension_api::ExtensionRegistryBuilder::new().build()),
         codex_extension_api::ExtensionDataInit::default(),
@@ -5683,6 +5687,26 @@ async fn make_session_with_history_source_and_agent_control_and_rx(
 }
 
 #[tokio::test]
+async fn disabled_mcp_runtime_has_no_servers_or_plugins() {
+    let (session, _rx_event) = make_session_with_history_source_and_agent_control_and_rx(
+        InitialHistory::New,
+        SessionSource::Exec,
+        AgentControl::default(),
+        McpRuntimeMode::Disabled,
+    )
+    .await
+    .expect("session should initialize");
+
+    let config = session.get_config().await;
+    let runtime_config = session.runtime_mcp_config(config.as_ref()).await;
+    let runtime = session.services.latest_mcp_runtime();
+
+    assert!(codex_mcp::configured_mcp_servers(&runtime_config).is_empty());
+    assert!(!runtime.plugins_available());
+    assert!(!runtime.manager().has_servers());
+}
+
+#[tokio::test]
 async fn resumed_root_session_uses_thread_id_as_session_id() {
     let thread_id = ThreadId::new();
     let (session, rx_event) = make_session_with_history_source_and_agent_control_and_rx(
@@ -5693,6 +5717,7 @@ async fn resumed_root_session_uses_thread_id_as_session_id() {
         }),
         SessionSource::Exec,
         AgentControl::default(),
+        McpRuntimeMode::Enabled,
     )
     .await
     .expect("resume should succeed");
@@ -5736,6 +5761,7 @@ async fn resumed_subagent_session_restores_persisted_session_id() {
         }),
         session_source,
         AgentControl::default(),
+        McpRuntimeMode::Enabled,
     )
     .await
     .expect("resume should succeed");

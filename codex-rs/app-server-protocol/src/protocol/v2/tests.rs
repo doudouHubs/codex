@@ -891,6 +891,19 @@ fn thread_fork_last_turn_id_round_trips() {
 }
 
 #[test]
+fn thread_fork_disable_mcp_round_trips() {
+    let params: ThreadForkParams = serde_json::from_value(json!({
+        "threadId": "thread-1",
+        "disableMcp": true,
+    }))
+    .expect("thread/fork params deserialize");
+
+    assert!(params.disable_mcp);
+    let serialized = serde_json::to_value(params).expect("thread/fork params serialize");
+    assert_eq!(serialized["disableMcp"], json!(true));
+}
+
+#[test]
 fn fs_get_metadata_response_round_trips_minimal_fields() {
     let response = FsGetMetadataResponse {
         is_directory: false,
