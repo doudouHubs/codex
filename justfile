@@ -6,6 +6,13 @@ set windows-shell := ["python", "-c", 'import os, runpy; runpy.run_path(os.envir
 
 rust_min_stack := "8388608" # 8 MiB
 python := if os_family() == "windows" { "python" } else { "python3" }
+# rusty_v8 downloads GitHub release assets during the first build. Keep the
+# local proxy configurable so the build remains usable when the proxy port changes.
+build_proxy := env_var_or_default("CODEX_BUILD_PROXY", "http://127.0.0.1:7890")
+# Release builds can use substantial memory, so cap local parallelism while keeping builds responsive.
+build_jobs := env_var_or_default("CODEX_BUILD_JOBS", "4")
+# Local builds prioritize completing within typical Windows memory limits; release packaging keeps the workspace profile.
+build_lto := env_var_or_default("CODEX_BUILD_LTO", "false")
 
 # Display help
 help:
@@ -34,6 +41,19 @@ file-search *args:
 # Run the standalone code-mode host from source.
 code-mode-host *args:
     cargo run --bin codex-code-mode-host -- {args}
+
+# Build a release executable for local use.
+[unix]
+build-i *args:
+    CARGO_BUILD_JOBS='{{ build_jobs }}' CARGO_PROFILE_RELEASE_LTO='{{ build_lto }}' HTTP_PROXY='{{ build_proxy }}' HTTPS_PROXY='{{ build_proxy }}' cargo build --release -p codex-cli --bin codex {args}
+
+[windows]
+build-i *args:
+    $env:CARGO_BUILD_JOBS = "{{ build_jobs }}"; $env:CARGO_PROFILE_RELEASE_LTO = "{{ build_lto }}"; $env:HTTP_PROXY = "{{ build_proxy }}"; $env:HTTPS_PROXY = "{{ build_proxy }}"; cargo build --release -p codex-cli --bin codex {args}
+
+# Remove release artifacts without touching debug artifacts.
+clean:
+    cargo clean --release
 
 # Build the CLI and run the app-server test client
 app-server-test-client *args:
