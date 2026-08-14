@@ -49,6 +49,7 @@ use crate::session::McpRuntimeMode;
 use crate::session::SUBMISSION_CHANNEL_CAPACITY;
 use crate::session::SessionIo;
 use crate::session::SessionSpawnArgs;
+use crate::session::ThreadRuntimeMode;
 use crate::session::emit_subagent_session_started;
 use crate::session::session::Session;
 use crate::session::turn_context::TurnContext;
@@ -106,6 +107,7 @@ pub(crate) async fn run_codex_thread_interactive(
         plugins_manager: Arc::clone(&parent_session.services.plugins_manager),
         mcp_manager: Arc::clone(&parent_session.services.mcp_manager),
         mcp_runtime_mode: McpRuntimeMode::Enabled,
+        thread_runtime_mode: ThreadRuntimeMode::Standard,
         code_mode_session_provider: parent_session.services.code_mode_service.session_provider(),
         extensions: Arc::clone(&parent_session.services.extensions),
         conversation_history,

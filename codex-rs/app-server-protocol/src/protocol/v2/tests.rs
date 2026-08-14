@@ -904,6 +904,19 @@ fn thread_fork_disable_mcp_round_trips() {
 }
 
 #[test]
+fn thread_fork_prompt_optimization_mode_round_trips() {
+    let params: ThreadForkParams = serde_json::from_value(json!({
+        "threadId": "thread-1",
+        "threadMode": "promptOptimization",
+    }))
+    .expect("thread/fork prompt mode params deserialize");
+
+    assert_eq!(params.thread_mode, Some(ThreadMode::PromptOptimization));
+    let serialized = serde_json::to_value(params).expect("thread/fork prompt mode serialize");
+    assert_eq!(serialized["threadMode"], json!("promptOptimization"));
+}
+
+#[test]
 fn fs_get_metadata_response_round_trips_minimal_fields() {
     let response = FsGetMetadataResponse {
         is_directory: false,

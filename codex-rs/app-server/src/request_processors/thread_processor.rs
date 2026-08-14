@@ -2,6 +2,7 @@ use super::thread_fork_goal::inherit_thread_goal_snapshot;
 use super::*;
 use crate::error_code::method_not_found;
 use codex_app_server_protocol::SelectedCapabilityRoot;
+use codex_app_server_protocol::ThreadMode;
 use codex_extension_api::ExtensionDataInit;
 use codex_protocol::config_types::MultiAgentMode;
 use codex_protocol::models::BUILT_IN_PERMISSION_PROFILE_DANGER_FULL_ACCESS;
@@ -3729,7 +3730,18 @@ impl ThreadRequestProcessor {
             exclude_turns,
             defer_goal_continuation,
             disable_mcp,
+            thread_mode,
         } = params;
+        let prompt_optimization = matches!(thread_mode, Some(ThreadMode::PromptOptimization));
+        // Prompt fork 的能力边界由服务端兜底，避免旧版或第三方客户端漏传权限时把
+        // 主线程的写入能力带入临时优化线程。Prompt 不继承 goal continuation。
+        let ephemeral = ephemeral || prompt_optimization;
+        let permissions = prompt_optimization
+            .then(|| codex_protocol::models::BUILT_IN_PERMISSION_PROFILE_READ_ONLY.to_string())
+            .or(permissions);
+        let sandbox = if prompt_optimization { None } else { sandbox };
+        let defer_goal_continuation = defer_goal_continuation && !prompt_optimization;
+        let disable_mcp = disable_mcp || prompt_optimization;
         let include_turns = !exclude_turns;
         if sandbox.is_some() && permissions.is_some() {
             return Err(invalid_request(
@@ -3836,7 +3848,22 @@ impl ThreadRequestProcessor {
         let fallback_model_provider = config.model_provider_id.clone();
 
         // side/Prompt 通过该协议标记走禁用 MCP 的线程级启动路径，普通 fork 保持原行为。
-        let fork_result = if disable_mcp {
+        let fork_result = if prompt_optimization {
+            self.thread_manager
+                .fork_thread_from_history_for_prompt(
+                    ForkSnapshot::Interrupted,
+                    config,
+                    InitialHistory::Resumed(ResumedHistory {
+                        conversation_id: source_thread_id,
+                        history: Arc::clone(&history_items),
+                        rollout_path: source_thread.rollout_path.clone(),
+                    }),
+                    thread_source.map(Into::into),
+                    self.request_trace_context(&request_id).await,
+                    supports_openai_form_elicitation,
+                )
+                .await
+        } else if disable_mcp {
             self.thread_manager
                 .fork_thread_from_history_without_mcp(
                     ForkSnapshot::Interrupted,

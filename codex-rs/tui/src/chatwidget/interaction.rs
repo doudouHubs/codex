@@ -2,8 +2,29 @@
 
 use super::*;
 use crate::bottom_pane::ComposerPromptMode;
+use crate::bottom_pane::LocalImageAttachment;
 
 impl ChatWidget {
+    /// Rebuild image elements from their visible placeholders after a Prompt draft crosses the
+    /// App event boundary, where the original textarea element ranges are intentionally cleared.
+    /// The placeholder is the only stable identity shared by the attachment state and the text.
+    fn prompt_image_text_elements(
+        text: &str,
+        local_images: &[LocalImageAttachment],
+    ) -> Vec<TextElement> {
+        local_images
+            .iter()
+            .filter_map(|image| {
+                text.find(&image.placeholder).map(|start| {
+                    TextElement::new(
+                        (start..start + image.placeholder.len()).into(),
+                        Some(image.placeholder.clone()),
+                    )
+                })
+            })
+            .collect()
+    }
+
     pub(crate) fn handle_key_event(&mut self, key_event: KeyEvent) {
         if self.bottom_pane.has_active_view()
             && !matches!(
@@ -216,6 +237,48 @@ impl ChatWidget {
         self.bottom_pane.set_prompt_text(text);
         self.refresh_plan_mode_nudge();
         self.request_redraw();
+    }
+
+    pub(crate) fn take_prompt_attachments(&mut self) -> (Vec<LocalImageAttachment>, Vec<String>) {
+        let local_images = self
+            .bottom_pane
+            .take_recent_submission_images_with_placeholders();
+        let remote_image_urls = self.bottom_pane.take_remote_image_urls();
+        (local_images, remote_image_urls)
+    }
+
+    pub(crate) fn restore_prompt_draft(
+        &mut self,
+        text: String,
+        local_images: Vec<LocalImageAttachment>,
+        remote_image_urls: Vec<String>,
+    ) {
+        let text_elements = Self::prompt_image_text_elements(&text, &local_images);
+        let local_image_paths = local_images.into_iter().map(|image| image.path).collect();
+        self.bottom_pane.set_remote_image_urls(remote_image_urls);
+        self.bottom_pane
+            .set_composer_text(text, text_elements, local_image_paths);
+        self.refresh_plan_mode_nudge();
+        self.request_redraw();
+    }
+
+    pub(crate) fn submit_prompt_user_message(
+        &mut self,
+        text: String,
+        local_images: Vec<LocalImageAttachment>,
+        remote_image_urls: Vec<String>,
+    ) {
+        let text_elements = Self::prompt_image_text_elements(&text, &local_images);
+        let _ = self.submit_user_message_with_shell_escape_policy(
+            UserMessage {
+                text,
+                local_images,
+                remote_image_urls,
+                text_elements,
+                mention_bindings: Vec::new(),
+            },
+            ShellEscapePolicy::Disallow,
+        );
     }
 
     pub(crate) fn record_prompt_history(&mut self, text: String) {

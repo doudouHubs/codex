@@ -81,6 +81,7 @@ use codex_app_server_protocol::ThreadMemoryModeSetResponse;
 use codex_app_server_protocol::ThreadMetadataGitInfoUpdateParams;
 use codex_app_server_protocol::ThreadMetadataUpdateParams;
 use codex_app_server_protocol::ThreadMetadataUpdateResponse;
+use codex_app_server_protocol::ThreadMode;
 use codex_app_server_protocol::ThreadReadParams;
 use codex_app_server_protocol::ThreadReadResponse;
 use codex_app_server_protocol::ThreadResumeParams;
@@ -550,6 +551,7 @@ impl AppServerSession {
             /*before_turn_id*/ None,
             ForkGoalContinuation::StartIfIdle,
             ForkMcpMode::Enabled,
+            None,
         )
         .await
     }
@@ -566,6 +568,24 @@ impl AppServerSession {
             /*before_turn_id*/ None,
             ForkGoalContinuation::StartIfIdle,
             ForkMcpMode::Disabled,
+            None,
+        )
+        .await
+    }
+
+    pub(crate) async fn fork_thread_for_prompt(
+        &mut self,
+        config: Config,
+        thread_id: ThreadId,
+    ) -> Result<AppServerStartedThread> {
+        self.fork_thread_at_with_mcp_mode(
+            config,
+            thread_id,
+            /*last_turn_id*/ None,
+            /*before_turn_id*/ None,
+            ForkGoalContinuation::StartIfIdle,
+            ForkMcpMode::Disabled,
+            Some(ThreadMode::PromptOptimization),
         )
         .await
     }
@@ -585,6 +605,7 @@ impl AppServerSession {
             before_turn_id,
             goal_continuation,
             ForkMcpMode::Enabled,
+            None,
         )
         .await
     }
@@ -597,27 +618,32 @@ impl AppServerSession {
         before_turn_id: Option<String>,
         goal_continuation: ForkGoalContinuation,
         mcp_mode: ForkMcpMode,
+        thread_mode: Option<ThreadMode>,
     ) -> Result<AppServerStartedThread> {
         let request_id = self.next_request_id();
         let session_config = self.session_config_with_effective_service_tier(&config);
+        let prompt_optimization = thread_mode == Some(ThreadMode::PromptOptimization);
+        let mut params = thread_fork_params_from_config(
+            session_config,
+            thread_id,
+            self.thread_params_mode(),
+            self.remote_cwd_override.as_deref(),
+        );
+        params.last_turn_id = last_turn_id;
+        params.before_turn_id = before_turn_id;
+        params.defer_goal_continuation =
+            goal_continuation == ForkGoalContinuation::DeferUntilNextTurn && !prompt_optimization;
+        params.disable_mcp = mcp_mode == ForkMcpMode::Disabled || prompt_optimization;
+        params.thread_mode = thread_mode;
+        if prompt_optimization {
+            // Prompt 线程必须是一次性的只读子线程，不能继承主线程的 sandbox/profile。
+            params.ephemeral = true;
+            params.permissions = Some(":read-only".to_string());
+            params.sandbox = None;
+        }
         let response: ThreadForkResponse = self
             .client
-            .request_typed(ClientRequest::ThreadFork {
-                request_id,
-                params: ThreadForkParams {
-                    last_turn_id,
-                    before_turn_id,
-                    defer_goal_continuation: goal_continuation
-                        == ForkGoalContinuation::DeferUntilNextTurn,
-                    disable_mcp: mcp_mode == ForkMcpMode::Disabled,
-                    ..thread_fork_params_from_config(
-                        session_config,
-                        thread_id,
-                        self.thread_params_mode(),
-                        self.remote_cwd_override.as_deref(),
-                    )
-                },
-            })
+            .request_typed(ClientRequest::ThreadFork { request_id, params })
             .await
             .map_err(|err| {
                 bootstrap_request_error("thread/fork failed during TUI bootstrap", err)

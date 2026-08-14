@@ -102,6 +102,8 @@ pub(crate) struct SessionConfiguration {
     pub(super) parent_thread_id: Option<ThreadId>,
     /// Optional analytics source classification for this thread.
     pub(super) thread_source: Option<ThreadSource>,
+    /// Runtime capability profile selected when the thread was spawned.
+    pub(super) thread_runtime_mode: ThreadRuntimeMode,
     /// Effective originator used for this thread's Responses requests and analytics events.
     pub(super) originator: String,
     pub(super) dynamic_tools: Vec<DynamicToolSpec>,
@@ -936,20 +938,30 @@ impl Session {
             turn_environments.update_selections(session_configuration.environment_selections());
             let resolved_environments = turn_environments.snapshot().await;
             let agents_md_manager = Arc::new(AgentsMdManager::new(user_instructions));
-            let plugin_skill_warmup = warm_plugins_and_skills_for_session_init(
-                Arc::clone(&config),
-                Arc::clone(&plugins_manager),
-                Arc::clone(&skills_service),
-                &resolved_environments,
-            )
-            .instrument(info_span!(
-                "session_init.plugin_skill_warmup",
-                otel.name = "session_init.plugin_skill_warmup",
-            ));
-            let ((), plugin_skill_errors) = tokio::join!(
-                agents_md_manager.refresh(config.as_ref(), &resolved_environments),
-                plugin_skill_warmup,
-            );
+            let plugin_skill_errors = if session_configuration
+                .thread_runtime_mode
+                .is_prompt_optimization()
+            {
+                // Prompt 线程会通过 exec_command 按需读取文件，不预热项目指令、skills 或
+                // plugins，避免启动时把 Agent 能力整套加载进来。
+                Vec::new()
+            } else {
+                let plugin_skill_warmup = warm_plugins_and_skills_for_session_init(
+                    Arc::clone(&config),
+                    Arc::clone(&plugins_manager),
+                    Arc::clone(&skills_service),
+                    &resolved_environments,
+                )
+                .instrument(info_span!(
+                    "session_init.plugin_skill_warmup",
+                    otel.name = "session_init.plugin_skill_warmup",
+                ));
+                let ((), plugin_skill_errors) = tokio::join!(
+                    agents_md_manager.refresh(config.as_ref(), &resolved_environments),
+                    plugin_skill_warmup,
+                );
+                plugin_skill_errors
+            };
             for err in &plugin_skill_errors {
                 error!(
                     "failed to load skill {}: {}",
@@ -1030,12 +1042,19 @@ impl Session {
                     (None, None)
                 };
 
-            let hooks = build_hooks_for_config(
-                &config,
-                plugins_manager.as_ref(),
-                resolved_environments.single_local_environment(),
-            )
-            .await;
+            let hooks = if session_configuration
+                .thread_runtime_mode
+                .is_prompt_optimization()
+            {
+                Hooks::default()
+            } else {
+                build_hooks_for_config(
+                    &config,
+                    plugins_manager.as_ref(),
+                    resolved_environments.single_local_environment(),
+                )
+                .await
+            };
             for warning in hooks.startup_warnings() {
                 post_session_configured_events.push(Event {
                     id: INITIAL_SUBMIT_ID.to_owned(),
@@ -1066,15 +1085,22 @@ impl Session {
             session_extension_data.insert(McpResourceClient::new(Arc::clone(
                 &mcp_connection_manager,
             )));
-            for contributor in extensions.thread_lifecycle_contributors() {
-                contributor.on_thread_start(codex_extension_api::ThreadStartInput {
-                    config: config.as_ref(),
-                    session_source: &session_configuration.session_source,
-                    persistent_thread_state_available: state_db_ctx.is_some(),
-                    environments: session_configuration.environment_selections(),
-                    session_store: &session_extension_data,
-                    thread_store: &thread_extension_data,
-                }).await;
+            if !session_configuration
+                .thread_runtime_mode
+                .is_prompt_optimization()
+            {
+                for contributor in extensions.thread_lifecycle_contributors() {
+                    contributor
+                        .on_thread_start(codex_extension_api::ThreadStartInput {
+                            config: config.as_ref(),
+                            session_source: &session_configuration.session_source,
+                            persistent_thread_state_available: state_db_ctx.is_some(),
+                            environments: session_configuration.environment_selections(),
+                            session_store: &session_extension_data,
+                            thread_store: &thread_extension_data,
+                        })
+                        .await;
+                }
             }
 
             let services = SessionServices {

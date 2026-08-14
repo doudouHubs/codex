@@ -413,6 +413,24 @@ pub(crate) enum McpRuntimeMode {
     Disabled,
 }
 
+/// Controls which runtime capabilities are initialized for a thread.
+///
+/// Prompt optimization is intentionally a separate mode from MCP disabling:
+/// side conversations also disable MCP, but they still need the normal Agent
+/// tool and context surface.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub(crate) enum ThreadRuntimeMode {
+    #[default]
+    Standard,
+    PromptOptimization,
+}
+
+impl ThreadRuntimeMode {
+    pub(crate) fn is_prompt_optimization(self) -> bool {
+        matches!(self, Self::PromptOptimization)
+    }
+}
+
 pub(crate) struct SessionSpawnArgs {
     pub(crate) config: Config,
     pub(crate) allow_provider_model_fallback: bool,
@@ -425,6 +443,7 @@ pub(crate) struct SessionSpawnArgs {
     pub(crate) plugins_manager: Arc<PluginsManager>,
     pub(crate) mcp_manager: Arc<McpManager>,
     pub(crate) mcp_runtime_mode: McpRuntimeMode,
+    pub(crate) thread_runtime_mode: ThreadRuntimeMode,
     pub(crate) code_mode_session_provider: Arc<dyn codex_code_mode::CodeModeSessionProvider>,
     pub(crate) extensions: Arc<codex_extension_api::ExtensionRegistry<crate::config::Config>>,
     pub(crate) conversation_history: InitialHistory,
@@ -518,6 +537,7 @@ impl Session {
             plugins_manager,
             mcp_manager,
             mcp_runtime_mode,
+            thread_runtime_mode,
             code_mode_session_provider,
             extensions,
             conversation_history,
@@ -548,9 +568,29 @@ impl Session {
         let (tx_event, rx_event) = async_channel::unbounded();
 
         let LoadedUserInstructions {
-            instructions: user_instructions,
+            instructions: mut user_instructions,
             warnings: user_instruction_provider_warnings,
         } = user_instructions;
+        if thread_runtime_mode.is_prompt_optimization() {
+            // Prompt 线程只负责改写文本。即使未来出现新的调用方，也不能因为漏传
+            // 权限配置而把主线程的写入能力带进这个临时子线程。
+            config
+                .permissions
+                .set_permission_profile(codex_protocol::models::PermissionProfile::read_only())
+                .map_err(|err| {
+                    CodexErr::InvalidRequest(format!(
+                        "Prompt optimization thread requires read-only permissions: {err}"
+                    ))
+                })?;
+            config.ephemeral = true;
+            config.include_apps_instructions = false;
+            config.include_collaboration_mode_instructions = false;
+            config.include_skill_instructions = false;
+            config.include_environment_context = false;
+            config.experimental_request_user_input_enabled = true;
+            // 项目级 AGENTS 指令属于主线程运行上下文，不能成为 Prompt 子线程的隐藏输入。
+            user_instructions = None;
+        }
         // TODO(anp) pull startup_warnings out of Config
         config
             .startup_warnings
@@ -613,9 +653,13 @@ impl Session {
         let model_info = models_manager
             .get_model_info(model.as_str(), &config.to_models_manager_config())
             .await;
-        let multi_agent_version = config.multi_agent_version_override().or_else(|| {
-            resolve_multi_agent_version(&conversation_history, inherited_multi_agent_version)
-        });
+        let multi_agent_version = if thread_runtime_mode.is_prompt_optimization() {
+            Some(MultiAgentVersion::Disabled)
+        } else {
+            config.multi_agent_version_override().or_else(|| {
+                resolve_multi_agent_version(&conversation_history, inherited_multi_agent_version)
+            })
+        };
         let history_mode = conversation_history.get_history_mode(
             requested_history_mode.unwrap_or_else(|| thread_store.default_history_mode()),
         );
@@ -626,7 +670,10 @@ impl Session {
             .unwrap_or_else(|| model_info.get_model_instructions(config.personality));
 
         // Dynamic tools are defined at thread start and persisted in rollout session metadata.
-        let dynamic_tools = if dynamic_tools.is_empty() {
+        let dynamic_tools = if thread_runtime_mode.is_prompt_optimization() {
+            // Prompt 线程不能从 fork 历史或调用方恢复动态工具，避免隐藏能力绕过白名单。
+            Vec::new()
+        } else if dynamic_tools.is_empty() {
             conversation_history.get_dynamic_tools().unwrap_or_default()
         } else {
             dynamic_tools
@@ -677,6 +724,7 @@ impl Session {
             forked_from_thread_id,
             parent_thread_id,
             thread_source,
+            thread_runtime_mode,
             originator,
             dynamic_tools,
             user_shell_override,
@@ -3099,6 +3147,10 @@ impl Session {
         &self,
         turn_context: &TurnContext,
     ) -> Vec<ResponseItem> {
+        if turn_context.is_prompt_optimization() {
+            // Prompt 线程不接受扩展贡献的额外上下文，保持优化目标和输入历史可控。
+            return Vec::new();
+        }
         let mut developer_sections = Vec::new();
         let mut contextual_user_sections = Vec::new();
         let mut separate_developer_sections = Vec::new();
@@ -3297,35 +3349,40 @@ impl Session {
                 }
             }
         }
-        let loaded_plugins = self
-            .services
-            .plugins_manager
-            .plugins_for_config(&turn_context.config.plugins_config_input())
-            .await;
-        let recommended_plugin_candidates =
-            if crate::tools::spec_plan::tool_suggest_enabled(turn_context) {
-                let auth = self.services.auth_manager.auth().await;
-                let plugins_config = turn_context.config.plugins_config_input();
-                self.services
-                    .plugins_manager
-                    .recommended_plugin_candidates_for_config(RecommendedPluginCandidatesInput {
-                        plugins_config: &plugins_config,
-                        loaded_plugins: &loaded_plugins,
-                        auth: auth.as_ref(),
-                        disabled_tools: &turn_context.config.tool_suggest.disabled_tools,
-                        app_server_client_name: turn_context.app_server_client_name.as_deref(),
-                    })
-                    .await
-            } else {
-                None
-            };
+        let recommended_plugin_candidates = if turn_context.is_prompt_optimization() {
+            None
+        } else if crate::tools::spec_plan::tool_suggest_enabled(turn_context) {
+            let loaded_plugins = self
+                .services
+                .plugins_manager
+                .plugins_for_config(&turn_context.config.plugins_config_input())
+                .await;
+            let auth = self.services.auth_manager.auth().await;
+            let plugins_config = turn_context.config.plugins_config_input();
+            self.services
+                .plugins_manager
+                .recommended_plugin_candidates_for_config(RecommendedPluginCandidatesInput {
+                    plugins_config: &plugins_config,
+                    loaded_plugins: &loaded_plugins,
+                    auth: auth.as_ref(),
+                    disabled_tools: &turn_context.config.tool_suggest.disabled_tools,
+                    app_server_client_name: turn_context.app_server_client_name.as_deref(),
+                })
+                .await
+        } else {
+            None
+        };
         if let Some(recommended_plugins) = recommended_plugin_candidates
             .as_deref()
             .and_then(RecommendedPluginsInstructions::from_plugins)
         {
             contextual_user_sections.push(recommended_plugins.render());
         }
-        let context_contributors = self.services.extensions.context_contributors().to_vec();
+        let context_contributors = if turn_context.is_prompt_optimization() {
+            Vec::new()
+        } else {
+            self.services.extensions.context_contributors().to_vec()
+        };
         for contributor in &context_contributors {
             for fragment in contributor
                 .contribute_thread_context(
@@ -3363,7 +3420,8 @@ impl Session {
             }
         }
         // This is full-context metadata. Steady-state context diffs should not re-emit it.
-        if turn_context.config.features.enabled(Feature::TokenBudget)
+        if !turn_context.is_prompt_optimization()
+            && turn_context.config.features.enabled(Feature::TokenBudget)
             && turn_context.model_context_window().is_some()
         {
             let mcp_result = mcp

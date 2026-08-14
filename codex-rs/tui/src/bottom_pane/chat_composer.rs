@@ -844,7 +844,7 @@ impl ChatComposer {
             self.prompt_optimization_mode = prompt_input.optimization_mode;
             // 历史保留用户输入的参数，方便通过上下键恢复之前的模式选择；参数只在提交链路中消费。
             self.record_prompt_history(raw_text.clone());
-            self.set_text_content(String::new(), Vec::new(), Vec::new());
+            self.clear_prompt_text_preserving_attachments();
             if ctrl_enter {
                 self.set_prompt_mode(ComposerPromptMode::Inactive);
             }
@@ -1446,6 +1446,17 @@ impl ChatComposer {
             .reset_local_images(Vec::new(), &mut self.draft.textarea);
         self.attachments.clear_remote_image_urls();
         self.draft.textarea.set_text_clearing_elements(&text);
+        self.draft.textarea.set_cursor(/*pos*/ 0);
+        self.sync_popups();
+    }
+
+    pub(crate) fn clear_prompt_text_preserving_attachments(&mut self) {
+        // Prompt 提交会异步切换到子线程，附件要等 App 层拿到它们后再转成 UserInput；
+        // 这里只清掉文本占位符，不能复用 set_prompt_text_content 把附件一起清空。
+        self.draft.textarea.set_text_clearing_elements("");
+        self.draft.is_bash_mode = false;
+        self.draft.pending_pastes.clear();
+        self.draft.mention_bindings.clear();
         self.draft.textarea.set_cursor(/*pos*/ 0);
         self.sync_popups();
     }
@@ -3410,9 +3421,19 @@ impl ChatComposer {
     }
 
     fn prompt_mode_footer_line(&self) -> Option<Line<'static>> {
-        (self.prompt_mode != ComposerPromptMode::Inactive)
-            .then_some(())
-            .map(|_| Line::from(vec![Span::from("Prompt mode").light_red()]))
+        if self.prompt_mode == ComposerPromptMode::Inactive {
+            return None;
+        }
+
+        // Prompt 子线程同时需要显示上下文名和模式名；模式名放在最右侧，保持和 Shell
+        // mode 一样的视觉定位，同时避免上下文标签把模式状态遮掉。
+        let mut spans = Vec::with_capacity(3);
+        if let Some(label) = self.footer.side_conversation_context_label.as_ref() {
+            spans.push(Span::from(label.clone()).magenta());
+            spans.push(Span::from(" · ").dim());
+        }
+        spans.push(Span::from("Prompt mode").light_red());
+        Some(Line::from(spans))
     }
 
     /// Applies any due `PasteBurst` flush at time `now`.
@@ -4575,25 +4596,25 @@ impl ChatComposer {
                             show_queue_hint,
                         )
                     };
-                    let right_line =
-                        if let Some(label) = self.footer.side_conversation_context_label.as_ref() {
-                            Some(side_conversation_context_line(label))
-                        } else if let Some(line) = self.shell_mode_footer_line() {
-                            Some(line)
-                        } else if let Some(line) = self.prompt_mode_footer_line() {
-                            Some(line)
-                        } else if status_line_active {
-                            let full = self.mode_indicator_line(show_cycle_hint);
-                            let compact = self.mode_indicator_line(/*show_cycle_hint*/ false);
-                            let full_width = full.as_ref().map(|l| l.width() as u16).unwrap_or(0);
-                            if can_show_left_with_context(hint_rect, left_width, full_width) {
-                                full
-                            } else {
-                                compact
-                            }
+                    let right_line = if let Some(line) = self.prompt_mode_footer_line() {
+                        Some(line)
+                    } else if let Some(label) = self.footer.side_conversation_context_label.as_ref()
+                    {
+                        Some(side_conversation_context_line(label))
+                    } else if let Some(line) = self.shell_mode_footer_line() {
+                        Some(line)
+                    } else if status_line_active {
+                        let full = self.mode_indicator_line(show_cycle_hint);
+                        let compact = self.mode_indicator_line(/*show_cycle_hint*/ false);
+                        let full_width = full.as_ref().map(|l| l.width() as u16).unwrap_or(0);
+                        if can_show_left_with_context(hint_rect, left_width, full_width) {
+                            full
                         } else {
-                            Some(self.right_footer_line_with_context())
-                        };
+                            compact
+                        }
+                    } else {
+                        Some(self.right_footer_line_with_context())
+                    };
                     let right_width = right_line.as_ref().map(|l| l.width() as u16).unwrap_or(0);
                     if status_line_active
                         && let Some(max_left) = max_left_width_for_right(hint_rect, right_width)

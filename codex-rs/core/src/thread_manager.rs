@@ -14,6 +14,7 @@ use crate::session::INITIAL_SUBMIT_ID;
 use crate::session::McpRuntimeMode;
 use crate::session::SessionIo;
 use crate::session::SessionSpawnArgs;
+use crate::session::ThreadRuntimeMode;
 use crate::session::resolve_multi_agent_version;
 use crate::session::session::Session;
 use crate::tasks::InterruptedTurnHistoryMarker;
@@ -736,6 +737,7 @@ impl ThreadManager {
             options.supports_openai_form_elicitation,
             /*user_shell_override*/ None,
             McpRuntimeMode::Enabled,
+            ThreadRuntimeMode::Standard,
         ))
         .await
     }
@@ -843,6 +845,7 @@ impl ThreadManager {
             supports_openai_form_elicitation,
             /*user_shell_override*/ None,
             McpRuntimeMode::Enabled,
+            ThreadRuntimeMode::Standard,
         ))
         .await
     }
@@ -917,6 +920,7 @@ impl ThreadManager {
             supports_openai_form_elicitation,
             /*user_shell_override*/ Some(user_shell_override),
             McpRuntimeMode::Enabled,
+            ThreadRuntimeMode::Standard,
         ))
         .await
     }
@@ -1046,6 +1050,7 @@ impl ThreadManager {
             parent_trace,
             supports_openai_form_elicitation,
             McpRuntimeMode::Enabled,
+            ThreadRuntimeMode::Standard,
         )
         .await
     }
@@ -1071,6 +1076,33 @@ impl ThreadManager {
             parent_trace,
             supports_openai_form_elicitation,
             McpRuntimeMode::Disabled,
+            ThreadRuntimeMode::Standard,
+        )
+        .await
+    }
+
+    /// Fork an existing thread into the isolated prompt-optimization runtime.
+    pub async fn fork_thread_from_history_for_prompt<S>(
+        &self,
+        snapshot: S,
+        config: Config,
+        history: InitialHistory,
+        thread_source: Option<ThreadSource>,
+        parent_trace: Option<W3cTraceContext>,
+        supports_openai_form_elicitation: bool,
+    ) -> CodexResult<NewThread>
+    where
+        S: Into<ForkSnapshot>,
+    {
+        self.fork_thread_from_history_with_mcp_mode(
+            snapshot,
+            config,
+            history,
+            thread_source,
+            parent_trace,
+            supports_openai_form_elicitation,
+            McpRuntimeMode::Disabled,
+            ThreadRuntimeMode::PromptOptimization,
         )
         .await
     }
@@ -1084,6 +1116,7 @@ impl ThreadManager {
         parent_trace: Option<W3cTraceContext>,
         supports_openai_form_elicitation: bool,
         mcp_runtime_mode: McpRuntimeMode,
+        thread_runtime_mode: ThreadRuntimeMode,
     ) -> CodexResult<NewThread>
     where
         S: Into<ForkSnapshot>,
@@ -1096,6 +1129,7 @@ impl ThreadManager {
             parent_trace,
             supports_openai_form_elicitation,
             mcp_runtime_mode,
+            thread_runtime_mode,
         )
         .await
     }
@@ -1109,6 +1143,7 @@ impl ThreadManager {
         parent_trace: Option<W3cTraceContext>,
         supports_openai_form_elicitation: bool,
         mcp_runtime_mode: McpRuntimeMode,
+        thread_runtime_mode: ThreadRuntimeMode,
     ) -> CodexResult<NewThread> {
         // `forked_from_id()` describes this history's existing lineage. When
         // forking a resumed thread, the child copies the resumed thread itself.
@@ -1117,16 +1152,19 @@ impl ThreadManager {
             InitialHistory::Forked(_) => history.forked_from_id(),
             InitialHistory::New | InitialHistory::Cleared => None,
         };
-        let multi_agent_version = self
-            .state
-            .effective_multi_agent_version_for_spawn(
-                &history,
-                /*session_source*/ None,
-                /*parent_thread_id*/ None,
-                source_thread_id,
-                &config,
-            )
-            .await;
+        let multi_agent_version = if thread_runtime_mode.is_prompt_optimization() {
+            MultiAgentVersion::Disabled
+        } else {
+            self.state
+                .effective_multi_agent_version_for_spawn(
+                    &history,
+                    /*session_source*/ None,
+                    /*parent_thread_id*/ None,
+                    source_thread_id,
+                    &config,
+                )
+                .await
+        };
         let interrupted_marker =
             InterruptedTurnHistoryMarker::from_config_and_version(&config, multi_agent_version);
         let history = fork_history_from_snapshot(snapshot, history, interrupted_marker);
@@ -1157,6 +1195,7 @@ impl ThreadManager {
             supports_openai_form_elicitation,
             /*user_shell_override*/ None,
             mcp_runtime_mode,
+            thread_runtime_mode,
         ))
         .await
     }
@@ -1506,6 +1545,7 @@ impl ThreadManagerState {
             /*supports_openai_form_elicitation*/ false,
             /*user_shell_override*/ None,
             McpRuntimeMode::Enabled,
+            ThreadRuntimeMode::Standard,
         ))
         .await
     }
@@ -1550,6 +1590,7 @@ impl ThreadManagerState {
             /*supports_openai_form_elicitation*/ false,
             /*user_shell_override*/ None,
             McpRuntimeMode::Enabled,
+            ThreadRuntimeMode::Standard,
         ))
         .await
     }
@@ -1598,6 +1639,7 @@ impl ThreadManagerState {
             /*supports_openai_form_elicitation*/ false,
             /*user_shell_override*/ None,
             McpRuntimeMode::Enabled,
+            ThreadRuntimeMode::Standard,
         ))
         .await
     }
@@ -1642,6 +1684,7 @@ impl ThreadManagerState {
             supports_openai_form_elicitation,
             user_shell_override,
             McpRuntimeMode::Enabled,
+            ThreadRuntimeMode::Standard,
         ))
         .await
     }
@@ -1669,6 +1712,7 @@ impl ThreadManagerState {
         supports_openai_form_elicitation: bool,
         user_shell_override: Option<crate::shell::Shell>,
         mcp_runtime_mode: McpRuntimeMode,
+        thread_runtime_mode: ThreadRuntimeMode,
     ) -> CodexResult<NewThread> {
         let is_resumed_thread = matches!(&initial_history, InitialHistory::Resumed(_));
         if let InitialHistory::Resumed(resumed) = &initial_history {
@@ -1728,6 +1772,7 @@ impl ThreadManagerState {
             plugins_manager: Arc::clone(&self.plugins_manager),
             mcp_manager: Arc::clone(&self.mcp_manager),
             mcp_runtime_mode,
+            thread_runtime_mode,
             code_mode_session_provider: Arc::clone(&self.code_mode_session_provider),
             extensions: Arc::clone(&self.extensions),
             conversation_history: initial_history,

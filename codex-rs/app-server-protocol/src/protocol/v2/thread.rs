@@ -46,6 +46,19 @@ pub enum ThreadStartSource {
     Clear,
 }
 
+/// Selects the runtime capability profile for a forked thread.
+///
+/// `Standard` preserves the normal Agent runtime. `PromptOptimization` is a
+/// temporary, read-only thread that only exposes capabilities needed to
+/// inspect context and improve a prompt.
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(rename_all = "camelCase", export_to = "v2/")]
+pub enum ThreadMode {
+    Standard,
+    PromptOptimization,
+}
+
 // === Threads, Turns, and Items ===
 // Thread APIs
 #[derive(
@@ -591,6 +604,10 @@ pub struct ThreadForkParams {
     #[experimental("thread/fork.disableMcp")]
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub disable_mcp: bool,
+    /// Selects a temporary capability profile for the forked thread.
+    #[experimental("thread/fork.threadMode")]
+    #[ts(optional = nullable)]
+    pub thread_mode: Option<ThreadMode>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS, ExperimentalApi)]

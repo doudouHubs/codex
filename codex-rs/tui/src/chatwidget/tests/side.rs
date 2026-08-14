@@ -446,6 +446,7 @@ async fn side_context_label_shows_parent_status_snapshot() {
 async fn prompt_context_label_snapshot() {
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
     chat.show_welcome_banner = false;
+    chat.set_side_conversation_active(/*active*/ true);
     chat.set_prompt_mode(ComposerPromptMode::Thread);
     chat.set_side_conversation_context_label(Some("Prompt from main thread".to_string()));
 
@@ -456,4 +457,34 @@ async fn prompt_context_label_snapshot() {
         .draw(|f| chat.render(f.area(), &mut *f.buffer_mut()))
         .expect("draw prompt footer");
     assert_chatwidget_snapshot!("prompt_context_label", terminal.backend());
+}
+
+#[tokio::test]
+async fn prompt_draft_restore_rebuilds_local_image_elements() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    let placeholder = "[Image #2]";
+    let text = format!("Review {placeholder} before continuing");
+    let local_images = vec![LocalImageAttachment {
+        placeholder: placeholder.to_string(),
+        path: PathBuf::from("/tmp/prompt.png"),
+    }];
+    let remote_image_urls = vec!["https://example.com/context.png".to_string()];
+
+    chat.restore_prompt_draft(
+        text.clone(),
+        local_images.clone(),
+        remote_image_urls.clone(),
+    );
+
+    let image_start = text.find(placeholder).expect("image placeholder exists");
+    assert_eq!(chat.bottom_pane.composer_text(), text);
+    assert_eq!(
+        chat.bottom_pane.composer_text_elements(),
+        vec![TextElement::new(
+            (image_start..image_start + placeholder.len()).into(),
+            Some(placeholder.to_string()),
+        )]
+    );
+    assert_eq!(chat.bottom_pane.composer_local_images(), local_images);
+    assert_eq!(chat.remote_image_urls(), remote_image_urls);
 }

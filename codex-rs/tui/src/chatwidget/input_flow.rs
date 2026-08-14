@@ -8,6 +8,7 @@ use super::*;
 use crate::bottom_pane::ComposerPromptMode;
 
 impl ChatWidget {
+    #[cfg(test)]
     pub(crate) fn submit_user_message_text(&mut self, text: String) {
         // Prompt 子线程会把模型生成的内容原样回填并继续提交；这里不能让开头的 `!`
         // 被主线程的 shell 快捷语法截走，否则优化结果会在本地执行而不是进入模型上下文。

@@ -191,8 +191,10 @@ fn build_tool_specs_and_registry(
     let mut planned_tools = PlannedTools::default();
     add_tool_sources(&context, &mut planned_tools);
     apply_direct_model_only_namespace_overrides(turn_context, &mut planned_tools);
-    append_tool_search_executor(&context, &mut planned_tools);
-    prepend_code_mode_executors(&context, &mut planned_tools);
+    if !turn_context.is_prompt_optimization() {
+        append_tool_search_executor(&context, &mut planned_tools);
+        prepend_code_mode_executors(&context, &mut planned_tools);
+    }
     build_model_visible_specs_and_registry(turn_context, planned_tools)
 }
 
@@ -577,6 +579,10 @@ fn code_mode_namespace_descriptions(
 
 #[instrument(level = "trace", skip_all)]
 fn add_tool_sources(context: &CoreToolPlanContext<'_>, planned_tools: &mut PlannedTools) {
+    if context.step_context.turn.is_prompt_optimization() {
+        add_prompt_optimization_tools(context, planned_tools);
+        return;
+    }
     // Guardian reviewers receive only `exec_command`, `write_stdin`, and `view_image`
     // when an environment is available; all general tool sources stay excluded.
     if crate::guardian::is_guardian_reviewer_source(&context.step_context.turn.session_source) {
@@ -615,6 +621,25 @@ fn add_tool_sources(context: &CoreToolPlanContext<'_>, planned_tools: &mut Plann
     add_dynamic_tools(context, planned_tools);
     for spec in hosted_model_tool_specs(context) {
         planned_tools.add_hosted_spec(spec);
+    }
+}
+
+fn add_prompt_optimization_tools(
+    context: &CoreToolPlanContext<'_>,
+    planned_tools: &mut PlannedTools,
+) {
+    let turn_context = context.step_context.turn.as_ref();
+    // Prompt 子线程只负责澄清需求和改写文本，不需要执行命令、读写工作区或调用托管模型。
+    // 即使主线程带有环境配置，也不能因为工具规划阶段的环境探测把这些能力重新加载进来。
+    if turn_context.config.experimental_request_user_input_enabled {
+        planned_tools.add_with_exposure(
+            RequestUserInputHandler {
+                available_modes: request_user_input_available_modes(
+                    turn_context.config.features.get(),
+                ),
+            },
+            ToolExposure::DirectModelOnly,
+        );
     }
 }
 

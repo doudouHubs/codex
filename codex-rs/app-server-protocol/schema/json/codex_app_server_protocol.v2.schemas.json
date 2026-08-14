@@ -17075,6 +17075,14 @@
       "title": "ThreadMetadataUpdateResponse",
       "type": "object"
     },
+    "ThreadMode": {
+      "description": "Selects the runtime capability profile for a forked thread.\n\n`Standard` preserves the normal Agent runtime. `PromptOptimization` is a temporary, read-only thread that only exposes capabilities needed to inspect context and improve a prompt.",
+      "enum": [
+        "standard",
+        "promptOptimization"
+      ],
+      "type": "string"
+    },
     "ThreadNameUpdatedNotification": {
       "$schema": "http://json-schema.org/draft-07/schema#",
       "properties": {

@@ -5,6 +5,6 @@ expression: terminal.backend()
 ---
 "                                                                                "
 "                                                                                "
-"› Ask Codex to do anything                                                      "
+" › Check recently modified functions for compatibility                          "
 "                                                                                "
-"  gpt-5.6-sol default · C:\tmp\project                 Prompt from main thread  "
+"  gpt-5.6-sol default · C:\tmp\project   Prompt from main thread · Prompt mode  "

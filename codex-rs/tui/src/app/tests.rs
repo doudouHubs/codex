@@ -572,6 +572,40 @@ async fn replay_thread_snapshot_restores_draft_and_queued_input() {
 }
 
 #[tokio::test]
+async fn prompt_thread_replay_omits_session_header() {
+    let (mut app, _rx, _op_rx) = make_test_app_with_channels().await;
+    let prompt_thread_id = ThreadId::new();
+    app.active_thread_id = Some(prompt_thread_id);
+    app.prompt_thread = Some(PromptThreadState::new(
+        ThreadId::new(),
+        prompt_thread_id,
+        "original prompt".to_string(),
+        Vec::new(),
+        Vec::new(),
+        crate::bottom_pane::PromptOptimizationMode::Full,
+    ));
+
+    app.replay_thread_snapshot(
+        ThreadEventSnapshot {
+            session: Some(test_thread_session(
+                prompt_thread_id,
+                test_path_buf("/tmp/prompt-thread"),
+            )),
+            turns: Vec::new(),
+            events: Vec::new(),
+            input_state: None,
+        },
+        /*resume_restored_queue*/ false,
+    );
+
+    let rendered = render_bottom_popup(&app.chat_widget, /*width*/ 80);
+    assert!(
+        !rendered.contains("OpenAI Codex"),
+        "Prompt replay must not render the normal OpenAI Codex session header: {rendered}"
+    );
+}
+
+#[tokio::test]
 async fn replay_thread_snapshot_restores_the_matching_safety_buffer_prompt() {
     let (mut app, _app_event_rx, _op_rx) = make_test_app_with_channels().await;
     let thread_id = ThreadId::new();

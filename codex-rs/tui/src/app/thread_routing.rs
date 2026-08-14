@@ -1370,7 +1370,11 @@ impl App {
                 self.chat_widget
                     .set_plan_mode_reasoning_effort(self.config.plan_mode_reasoning_effort.clone());
             }
-            if self.side_threads.contains_key(&session.thread_id) {
+            // Prompt 线程和 side 线程都只需要轻量会话状态；回放时不能走普通分支，
+            // 否则会重新插入 OpenAI Codex 头部，破坏 Prompt 的隔离界面。
+            if self.prompt_thread_id() == Some(session.thread_id)
+                || self.side_threads.contains_key(&session.thread_id)
+            {
                 self.chat_widget.handle_side_thread_session(session);
             } else if suppress_replay_notices {
                 self.chat_widget.handle_thread_session_quiet(session);

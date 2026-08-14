@@ -185,7 +185,9 @@ pub(crate) async fn run_turn(
         return Ok(None);
     };
 
-    if run_pending_session_start_hooks(&sess, &turn_context).await {
+    if !turn_context.is_prompt_optimization()
+        && run_pending_session_start_hooks(&sess, &turn_context).await
+    {
         return Ok(None);
     }
     let mut can_drain_pending_input = input.is_empty();
@@ -527,6 +529,10 @@ async fn build_skills_and_plugins(
     cancellation_token: &CancellationToken,
 ) -> Option<(Vec<ResponseItem>, HashSet<String>)> {
     let turn_context = step_context.turn.as_ref();
+    if turn_context.is_prompt_optimization() {
+        // Prompt 线程不读取 skill/plugin mention，也不让扩展注入额外指令。
+        return Some((Vec::new(), HashSet::new()));
+    }
     // Guardian input embeds the parent transcript as untrusted evidence. Do not interpret skill or
     // plugin mentions from that generated prompt as requests to inject additional instructions.
     if crate::guardian::is_guardian_reviewer_source(&turn_context.session_source) {
@@ -1231,6 +1237,20 @@ pub(crate) async fn built_tools(
     cancellation_token: &CancellationToken,
 ) -> CodexResult<Arc<ToolRouter>> {
     let turn_context = step_context.turn.as_ref();
+    if turn_context.is_prompt_optimization() {
+        // Prompt 的工具白名单由 spec_plan 负责注册；这里不能先枚举 MCP、插件或扩展，
+        // 否则工具规划虽然最终会过滤，启动时的外部加载成本仍然已经发生。
+        return Ok(Arc::new(ToolRouter::from_context(
+            step_context,
+            ToolRouterParams {
+                tool_runtimes: Vec::new(),
+                tool_suggest_candidates: None,
+                extension_tool_executors: Vec::new(),
+                dynamic_tools: turn_context.dynamic_tools.as_slice(),
+            },
+            &sess.services.tool_search_handler_cache,
+        )));
+    }
     let all_mcp_tools = step_context
         .mcp_tools()
         .or_cancel(cancellation_token)

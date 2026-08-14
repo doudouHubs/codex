@@ -32,6 +32,7 @@ use serde_json::json;
 
 use crate::config::CurrentTimeReminderConfig;
 use crate::environment_selection::TurnEnvironmentState;
+use crate::session::ThreadRuntimeMode;
 use crate::session::step_context::StepContext;
 use crate::session::tests::make_session_and_context;
 use crate::session::turn_context::TurnContext;
@@ -463,6 +464,44 @@ async fn request_user_input_tool_respects_experimental_config_gate() {
     .await;
     disabled.assert_visible_lacks(&["request_user_input"]);
     disabled.assert_registered_lacks(&["request_user_input"]);
+}
+
+#[tokio::test]
+async fn prompt_optimization_profile_exposes_only_prompt_tools() {
+    let plan = probe(|turn| {
+        turn.thread_runtime_mode = ThreadRuntimeMode::PromptOptimization;
+        set_features(
+            turn,
+            &[
+                Feature::ShellTool,
+                Feature::UnifiedExec,
+                Feature::RequestPermissionsTool,
+                Feature::MultiAgentV2,
+            ],
+        );
+        turn.model_info.apply_patch_tool_type = Some(ApplyPatchToolType::Freeform);
+    })
+    .await;
+
+    plan.assert_visible_contains(&["request_user_input"]);
+    plan.assert_visible_lacks(&[
+        "apply_patch",
+        "plan",
+        "request_permissions",
+        "spawn_agent",
+        "send_message",
+        "tool_search",
+        "shell_command",
+    ]);
+    plan.assert_registered_lacks(&[
+        "apply_patch",
+        "plan",
+        "request_permissions",
+        "spawn_agent",
+        "send_message",
+        "tool_search",
+        "shell_command",
+    ]);
 }
 
 #[tokio::test]

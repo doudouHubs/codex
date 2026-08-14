@@ -737,6 +737,7 @@ async fn guardian_subagent_does_not_inherit_parent_exec_policy_rules() {
         plugins_manager,
         mcp_manager,
         mcp_runtime_mode: McpRuntimeMode::Enabled,
+        thread_runtime_mode: ThreadRuntimeMode::Standard,
         code_mode_session_provider: Arc::new(codex_code_mode::InProcessCodeModeSessionProvider),
         extensions: codex_extension_api::empty_extension_registry(),
         conversation_history: InitialHistory::New,

@@ -2,6 +2,7 @@ use super::*;
 use crate::environment_selection::TurnEnvironmentSnapshot;
 use crate::shell_snapshot::ShellSnapshotFile;
 use codex_core_skills::HostSkillsSnapshot;
+use codex_core_skills::SkillLoadOutcome;
 use codex_file_system::FileSystemSandboxContext;
 use codex_model_provider::SharedModelProvider;
 use codex_model_provider::create_model_provider;
@@ -125,6 +126,7 @@ pub struct TurnContext {
     pub(crate) history_mode: ThreadHistoryMode,
     pub(crate) parent_thread_id: Option<ThreadId>,
     pub(crate) originator: String,
+    pub(crate) thread_runtime_mode: ThreadRuntimeMode,
     pub(crate) environments: TurnEnvironmentSnapshot,
     /// The session's absolute working directory. All relative paths provided
     /// by the model as well as sandbox policies are resolved against this path
@@ -162,6 +164,10 @@ enum TurnMultiAgentRuntime {
 }
 
 impl TurnContext {
+    pub(crate) fn is_prompt_optimization(&self) -> bool {
+        self.thread_runtime_mode.is_prompt_optimization()
+    }
+
     pub(crate) fn item_ids_enabled(&self) -> bool {
         self.config.features.enabled(Feature::ItemIds)
             || matches!(self.history_mode, ThreadHistoryMode::Paginated)
@@ -288,6 +294,7 @@ impl TurnContext {
             history_mode: self.history_mode,
             parent_thread_id: self.parent_thread_id,
             originator: self.originator.clone(),
+            thread_runtime_mode: self.thread_runtime_mode,
             environments: self.environments.clone(),
             #[allow(deprecated)]
             cwd: self.cwd.clone(),
@@ -566,6 +573,7 @@ impl Session {
             history_mode: session_configuration.history_mode,
             parent_thread_id: session_configuration.parent_thread_id,
             originator: session_configuration.originator.clone(),
+            thread_runtime_mode: session_configuration.thread_runtime_mode,
             environments,
             #[allow(deprecated)]
             cwd,
@@ -742,26 +750,34 @@ impl Session {
                     .or(model_info.multi_agent_version),
             ),
         };
-        let plugins_input = per_turn_config.plugins_config_input();
-        let plugin_outcome = self
-            .services
-            .plugins_manager
-            .plugins_for_config(&plugins_input)
-            .await;
-        let effective_skill_roots = plugin_outcome.effective_plugin_skill_roots();
-        let plugin_skill_snapshots = self
-            .services
-            .plugins_manager
-            .plugin_skill_snapshots_for_config(&plugins_input);
-        let skills_input = skills_load_input_from_config(&per_turn_config, effective_skill_roots)
-            .with_plugin_skill_snapshots(plugin_skill_snapshots);
-        let fs = primary_turn_environment
-            .map(|turn_environment| turn_environment.environment.get_filesystem());
-        let skills_snapshot = self
-            .services
-            .skills_service
-            .snapshot_for_config(&skills_input, fs)
-            .await;
+        let skills_snapshot = if session_configuration
+            .thread_runtime_mode
+            .is_prompt_optimization()
+        {
+            // Prompt 只做提示词改写，不需要加载项目 skills 或插件提供的 skill 目录。
+            HostSkillsSnapshot::new(Arc::new(SkillLoadOutcome::default()))
+        } else {
+            let plugins_input = per_turn_config.plugins_config_input();
+            let plugin_outcome = self
+                .services
+                .plugins_manager
+                .plugins_for_config(&plugins_input)
+                .await;
+            let effective_skill_roots = plugin_outcome.effective_plugin_skill_roots();
+            let plugin_skill_snapshots = self
+                .services
+                .plugins_manager
+                .plugin_skill_snapshots_for_config(&plugins_input);
+            let skills_input =
+                skills_load_input_from_config(&per_turn_config, effective_skill_roots)
+                    .with_plugin_skill_snapshots(plugin_skill_snapshots);
+            let fs = primary_turn_environment
+                .map(|turn_environment| turn_environment.environment.get_filesystem());
+            self.services
+                .skills_service
+                .snapshot_for_config(&skills_input, fs)
+                .await
+        };
         let mut turn_context: TurnContext = Self::make_turn_context(
             self.thread_id(),
             self.session_id(),
