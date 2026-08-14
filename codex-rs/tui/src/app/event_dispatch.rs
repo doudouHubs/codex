@@ -1971,6 +1971,20 @@ impl App {
                     .handle_start_side(tui, app_server, parent_thread_id, user_message)
                     .await;
             }
+            AppEvent::StartPrompt { text } => {
+                self.handle_start_prompt(tui, app_server, text).await?;
+            }
+            AppEvent::ContinuePrompt { text } => {
+                if self.is_active_prompt_thread() {
+                    self.chat_widget.submit_user_message_text(text);
+                }
+            }
+            AppEvent::CancelPrompt => {
+                self.cancel_prompt(tui, app_server).await?;
+            }
+            AppEvent::SubmitPromptToMain { text } => {
+                self.submit_prompt_to_main(tui, app_server, text).await?;
+            }
             AppEvent::OpenSkillsList => {
                 self.chat_widget.open_skills_list();
             }

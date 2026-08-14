@@ -186,6 +186,7 @@ pub(crate) enum CancellationEvent {
 use crate::bottom_pane::prompt_args::parse_slash_name;
 pub(crate) use chat_composer::ChatComposer;
 pub(crate) use chat_composer::ChatComposerConfig;
+pub(crate) use chat_composer::ComposerPromptMode;
 pub(crate) use chat_composer::InputResult;
 pub(crate) use chat_composer::QueuedInputAction;
 pub(crate) use chat_composer_history::HistoryEntry;
@@ -683,6 +684,12 @@ impl BottomPane {
         } else if self.composer.cancel_history_search() {
             self.request_redraw();
             CancellationEvent::Handled
+        } else if self.composer.prompt_mode() != ComposerPromptMode::Inactive {
+            // Ctrl+C in Prompt mode cancels the isolated flow as a whole. Do not clear the draft
+            // here: App needs the original prompt stored in PromptThreadState to restore it.
+            self.composer.set_prompt_mode(ComposerPromptMode::Inactive);
+            self.request_redraw();
+            CancellationEvent::Handled
         } else if self.composer_is_empty() {
             CancellationEvent::NotHandled
         } else {
@@ -692,6 +699,20 @@ impl BottomPane {
             self.request_redraw();
             CancellationEvent::Handled
         }
+    }
+
+    /// Drop every bottom-pane view before a Prompt child is discarded.
+    ///
+    /// `request_user_input` normally owns Ctrl+C while it is visible. Prompt mode is different:
+    /// Ctrl+C is a child-thread lifecycle command, so leaving the modal in the old widget would
+    /// make the newly restored main thread inherit a stale disabled composer.
+    pub(crate) fn clear_views_for_prompt_cancel(&mut self) {
+        if self.view_stack.is_empty() {
+            return;
+        }
+        self.view_stack.clear();
+        self.on_active_view_complete();
+        self.request_redraw();
     }
 
     pub fn handle_paste(&mut self, pasted: String) {
@@ -803,6 +824,30 @@ impl BottomPane {
         placeholder: Option<String>,
     ) {
         self.composer.set_input_enabled(enabled, placeholder);
+        self.request_redraw();
+    }
+
+    pub(crate) fn set_prompt_text(&mut self, text: String) {
+        self.composer.set_prompt_text_content(text);
+        self.composer.move_cursor_to_end();
+        self.request_redraw();
+    }
+
+    pub(crate) fn record_prompt_history(&mut self, text: String) {
+        self.composer.record_prompt_history(text);
+    }
+
+    pub(crate) fn prompt_mode(&self) -> ComposerPromptMode {
+        self.composer.prompt_mode()
+    }
+
+    pub(crate) fn set_prompt_mode(&mut self, mode: ComposerPromptMode) {
+        self.composer.set_prompt_mode(mode);
+        self.request_redraw();
+    }
+
+    pub(crate) fn set_prompt_mode_available(&mut self, available: bool) {
+        self.composer.set_prompt_mode_available(available);
         self.request_redraw();
     }
 

@@ -267,6 +267,20 @@ impl App {
             .map(|state| state.parent_thread_id)
     }
 
+    /// 返回当前线程对应的 main/side 另一端；未处于这对线程时返回 `None`。
+    pub(super) fn side_toggle_target_thread_id(&self) -> Option<ThreadId> {
+        let displayed_thread_id = self.current_displayed_thread_id()?;
+        if let Some(state) = self.side_threads.get(&displayed_thread_id) {
+            return Some(state.parent_thread_id);
+        }
+
+        self.side_threads
+            .iter()
+            .find_map(|(side_thread_id, state)| {
+                (state.parent_thread_id == displayed_thread_id).then_some(*side_thread_id)
+            })
+    }
+
     pub(super) fn set_side_parent_status(
         &mut self,
         parent_thread_id: ThreadId,

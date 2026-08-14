@@ -5,8 +5,24 @@
 //! follow-ups, and restoring draft state across interrupts or thread switches.
 
 use super::*;
+use crate::bottom_pane::ComposerPromptMode;
 
 impl ChatWidget {
+    pub(crate) fn submit_user_message_text(&mut self, text: String) {
+        // Prompt 子线程会把模型生成的内容原样回填并继续提交；这里不能让开头的 `!`
+        // 被主线程的 shell 快捷语法截走，否则优化结果会在本地执行而不是进入模型上下文。
+        let _ = self.submit_user_message_with_shell_escape_policy(
+            UserMessage {
+                text,
+                local_images: Vec::new(),
+                remote_image_urls: Vec::new(),
+                text_elements: Vec::new(),
+                mention_bindings: Vec::new(),
+            },
+            ShellEscapePolicy::Disallow,
+        );
+    }
+
     pub(super) fn handle_composer_input_result(
         &mut self,
         input_result: InputResult,
@@ -52,6 +68,41 @@ impl ChatWidget {
             } => {
                 let user_message = self.user_message_from_submission(text, text_elements);
                 self.queue_user_message_with_options(user_message, action, pending_pastes);
+            }
+            InputResult::PromptSubmitted { text, submit, mode } => {
+                if text.trim().is_empty() {
+                    return;
+                }
+                match (mode, submit) {
+                    (ComposerPromptMode::Hash, false) => {
+                        self.app_event_tx.send(AppEvent::StartPrompt { text });
+                    }
+                    (ComposerPromptMode::Hash, true) => {
+                        // Ctrl+Enter in the entry mode intentionally bypasses optimization and
+                        // follows the normal submission path, including queue and plan-mode rules.
+                        self.handle_composer_input_result(
+                            InputResult::Submitted {
+                                text,
+                                text_elements: Vec::new(),
+                            },
+                            had_modal_or_popup,
+                        );
+                        return;
+                    }
+                    (ComposerPromptMode::Thread, false) => {
+                        self.app_event_tx.send(AppEvent::ContinuePrompt { text });
+                    }
+                    (ComposerPromptMode::Thread, true) => {
+                        self.app_event_tx
+                            .send(AppEvent::SubmitPromptToMain { text });
+                    }
+                    (ComposerPromptMode::Inactive, _) => {}
+                }
+            }
+            InputResult::PromptCancelled { mode } => {
+                if mode == ComposerPromptMode::Thread {
+                    self.app_event_tx.send(AppEvent::CancelPrompt);
+                }
             }
             InputResult::Command(cmd) => {
                 self.handle_slash_command_dispatch(cmd);

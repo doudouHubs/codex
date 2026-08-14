@@ -4,6 +4,7 @@
 //! channels, submits thread-scoped operations through the app server, and replays buffered events
 //! when the visible thread changes.
 
+use super::prompt::PromptThreadEventOutcome;
 use super::session_lifecycle::ThreadAttachPresentation;
 use super::*;
 use crate::chatwidget::ThreadInputStateRestoreMode;
@@ -124,6 +125,9 @@ impl App {
     }
 
     pub(super) fn thread_label(&self, thread_id: ThreadId) -> String {
+        if self.prompt_thread_id() == Some(thread_id) {
+            return Self::prompt_context_label().to_string();
+        }
         let is_primary = self.primary_thread_id == Some(thread_id);
         let fallback_label = if is_primary {
             "Main [default]".to_string()
@@ -187,6 +191,7 @@ impl App {
             .active_agent_label(self.current_displayed_thread_id(), self.primary_thread_id);
         self.chat_widget.set_active_agent_label(label);
         self.sync_side_thread_ui();
+        self.sync_prompt_thread_ui();
     }
 
     pub(super) async fn thread_cwd(&self, thread_id: ThreadId) -> Option<AbsolutePathBuf> {
@@ -988,12 +993,14 @@ impl App {
         }
         session.message_history = None;
         session.rollout_path = rollout_path;
-        self.upsert_agent_picker_thread(
-            thread_id,
-            notification.thread.agent_nickname.clone(),
-            notification.thread.agent_role.clone(),
-            /*is_closed*/ false,
-        );
+        if self.prompt_thread_id() != Some(thread_id) {
+            self.upsert_agent_picker_thread(
+                thread_id,
+                notification.thread.agent_nickname.clone(),
+                notification.thread.agent_role.clone(),
+                /*is_closed*/ false,
+            );
+        }
         Some(session)
     }
 
@@ -1264,15 +1271,41 @@ impl App {
     /// refreshes from the backend. Refresh failures are treated as "thread is only inspectable by
     /// historical id now" and converted into closed picker entries instead of deleting them, so
     /// the stable traversal order remains intact for review and keyboard navigation.
-    pub(super) async fn drain_active_thread_events(&mut self, tui: &mut tui::Tui) -> Result<()> {
+    pub(super) async fn drain_active_thread_events(
+        &mut self,
+        tui: &mut tui::Tui,
+        app_server: &mut AppServerSession,
+    ) -> Result<()> {
         let Some(mut rx) = self.active_thread_rx.take() else {
             return Ok(());
         };
 
         let mut disconnected = false;
+        let mut prompt_closed = false;
         loop {
             match rx.try_recv() {
-                Ok(event) => self.handle_thread_event_now(event),
+                Ok(event) => {
+                    if self.is_active_prompt_thread() {
+                        let prompt_outcome = self.observe_prompt_event(&event);
+                        match prompt_outcome {
+                            PromptThreadEventOutcome::TurnCompleted(text) => {
+                                if !text.trim().is_empty() {
+                                    self.chat_widget.set_prompt_text(text);
+                                }
+                            }
+                            PromptThreadEventOutcome::ThreadClosed => {
+                                // Thread selection can leave a closed Prompt event buffered in
+                                // the receiver. Reuse the normal close path so the temporary
+                                // channel and the main-thread draft are restored together.
+                                self.cancel_prompt(tui, app_server).await?;
+                                prompt_closed = true;
+                                break;
+                            }
+                            PromptThreadEventOutcome::None => {}
+                        }
+                    }
+                    self.handle_thread_event_now(event)
+                }
                 Err(TryRecvError::Empty) => break,
                 Err(TryRecvError::Disconnected) => {
                     disconnected = true;
@@ -1281,10 +1314,10 @@ impl App {
             }
         }
 
-        if !disconnected {
-            self.active_thread_rx = Some(rx);
-        } else {
+        if disconnected {
             self.clear_active_thread().await;
+        } else if !prompt_closed {
+            self.active_thread_rx = Some(rx);
         }
 
         if self.backtrack_render_pending {
@@ -1479,6 +1512,25 @@ impl App {
         app_server: &mut AppServerSession,
         event: ThreadBufferedEvent,
     ) -> Result<()> {
+        if self.is_active_prompt_thread() {
+            let prompt_outcome = self.observe_prompt_event(&event);
+            match prompt_outcome {
+                PromptThreadEventOutcome::TurnCompleted(text) => {
+                    self.handle_thread_event_now(event);
+                    if !text.trim().is_empty() {
+                        self.chat_widget.set_prompt_text(text);
+                    }
+                    self.sync_prompt_thread_ui();
+                    return Ok(());
+                }
+                PromptThreadEventOutcome::ThreadClosed => {
+                    self.cancel_prompt(tui, app_server).await?;
+                    return Ok(());
+                }
+                PromptThreadEventOutcome::None => {}
+            }
+        }
+
         // Capture this before any potential thread switch: we only want to clear
         // the exit marker when the currently active thread acknowledges shutdown.
         let pending_shutdown_exit_completed = matches!(

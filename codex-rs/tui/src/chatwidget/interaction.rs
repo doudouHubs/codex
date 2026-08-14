@@ -1,6 +1,7 @@
 //! Key routing and composer-adjacent UI interaction for `ChatWidget`.
 
 use super::*;
+use crate::bottom_pane::ComposerPromptMode;
 
 impl ChatWidget {
     pub(crate) fn handle_key_event(&mut self, key_event: KeyEvent) {
@@ -211,6 +212,16 @@ impl ChatWidget {
         self.request_redraw();
     }
 
+    pub(crate) fn set_prompt_text(&mut self, text: String) {
+        self.bottom_pane.set_prompt_text(text);
+        self.refresh_plan_mode_nudge();
+        self.request_redraw();
+    }
+
+    pub(crate) fn record_prompt_history(&mut self, text: String) {
+        self.bottom_pane.record_prompt_history(text);
+    }
+
     pub(crate) fn external_editor_state(&self) -> ExternalEditorState {
         self.external_editor_state
     }
@@ -358,6 +369,31 @@ impl ChatWidget {
     /// When the double-press quit shortcut is enabled, pressing the same shortcut again before
     /// expiry requests a shutdown-first quit.
     fn on_ctrl_c(&mut self) {
+        match self.prompt_mode() {
+            ComposerPromptMode::Hash => {
+                // Hash entry mode is local to the composer; it must not arm the global quit
+                // shortcut or emit a child-thread lifecycle event.
+                self.bottom_pane
+                    .set_prompt_mode(ComposerPromptMode::Inactive);
+                self.bottom_pane.clear_quit_shortcut_hint();
+                self.quit_shortcut_expires_at = None;
+                self.quit_shortcut_key = None;
+                return;
+            }
+            ComposerPromptMode::Thread => {
+                // A request_user_input view otherwise consumes Ctrl+C itself. Prompt mode owns
+                // the key at the ChatWidget boundary so the whole isolated flow closes at once.
+                self.bottom_pane.clear_views_for_prompt_cancel();
+                self.bottom_pane
+                    .set_prompt_mode(ComposerPromptMode::Inactive);
+                self.bottom_pane.clear_quit_shortcut_hint();
+                self.quit_shortcut_expires_at = None;
+                self.quit_shortcut_key = None;
+                self.app_event_tx.send(AppEvent::CancelPrompt);
+                return;
+            }
+            ComposerPromptMode::Inactive => {}
+        }
         let key = key_hint::ctrl(KeyCode::Char('c'));
         let modal_or_popup_active = !self.bottom_pane.no_modal_or_popup_active();
         let should_pause_active_goal = self

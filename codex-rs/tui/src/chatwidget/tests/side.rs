@@ -1,4 +1,5 @@
 use super::*;
+use crate::bottom_pane::ComposerPromptMode;
 use pretty_assertions::assert_eq;
 use ratatui::Terminal;
 use ratatui::backend::TestBackend;
@@ -248,6 +249,25 @@ async fn submit_user_message_as_plain_user_turn_does_not_run_shell_commands() {
 }
 
 #[tokio::test]
+async fn submit_prompt_user_message_does_not_run_shell_commands() {
+    let (mut chat, _rx, mut op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    chat.thread_id = Some(ThreadId::new());
+
+    chat.submit_user_message_text("!echo prompt text".into());
+
+    match next_submit_op(&mut op_rx) {
+        Op::UserTurn { items, .. } => assert_eq!(
+            items,
+            vec![UserInput::Text {
+                text: "!echo prompt text".to_string(),
+                text_elements: Vec::new(),
+            }]
+        ),
+        other => panic!("expected Op::UserTurn for prompt shell-like input, got {other:?}"),
+    }
+}
+
+#[tokio::test]
 async fn slash_side_without_args_starts_empty_side_conversation() {
     let (mut chat, mut rx, mut op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
     let parent_thread_id = ThreadId::new();
@@ -420,4 +440,20 @@ async fn side_context_label_shows_parent_status_snapshot() {
         .draw(|f| chat.render(f.area(), f.buffer_mut()))
         .expect("draw side conversation footer");
     assert_chatwidget_snapshot!("side_context_label_shows_parent_status", terminal.backend());
+}
+
+#[tokio::test]
+async fn prompt_context_label_snapshot() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    chat.show_welcome_banner = false;
+    chat.set_prompt_mode(ComposerPromptMode::Thread);
+    chat.set_side_conversation_context_label(Some("Prompt from main thread".to_string()));
+
+    let width = 80;
+    let height = chat.desired_height(width);
+    let mut terminal = Terminal::new(TestBackend::new(width, height)).expect("create terminal");
+    terminal
+        .draw(|f| chat.render(f.area(), &mut *f.buffer_mut()))
+        .expect("draw prompt footer");
+    assert_chatwidget_snapshot!("prompt_context_label", terminal.backend());
 }

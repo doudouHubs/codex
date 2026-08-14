@@ -158,6 +158,24 @@ pub(crate) enum AppEvent {
         user_message: Option<UserMessage>,
     },
 
+    /// Start an isolated prompt-optimization thread from the current main-thread draft.
+    StartPrompt {
+        text: String,
+    },
+
+    /// Submit another prompt to the active isolated prompt-optimization thread.
+    ContinuePrompt {
+        text: String,
+    },
+
+    /// Cancel the active isolated prompt-optimization thread and restore the main draft.
+    CancelPrompt,
+
+    /// Close the isolated prompt-optimization thread and submit its latest output to main.
+    SubmitPromptToMain {
+        text: String,
+    },
+
     /// Submit an op to the specified thread, regardless of current focus.
     SubmitThreadOp {
         thread_id: ThreadId,

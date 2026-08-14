@@ -304,6 +304,19 @@ pub enum InputResult {
         text: String,
         text_elements: Vec<TextElement>,
     },
+    /// A prompt submitted through the `#` optimization flow.
+    ///
+    /// `submit` is true only for Prompt-thread `Ctrl+Enter`, which exits the
+    /// isolated flow and sends the current optimized text to the main thread.
+    PromptSubmitted {
+        text: String,
+        submit: bool,
+        mode: ComposerPromptMode,
+    },
+    /// Exit prompt mode without submitting the current draft.
+    PromptCancelled {
+        mode: ComposerPromptMode,
+    },
     Queued {
         text: String,
         text_elements: Vec<TextElement>,
@@ -331,6 +344,14 @@ pub enum QueuedInputAction {
     Plain,
     ParseSlash,
     RunShell,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum ComposerPromptMode {
+    #[default]
+    Inactive,
+    Hash,
+    Thread,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -409,6 +430,8 @@ pub(crate) struct ChatComposer {
     personality_command_enabled: bool,
     windows_degraded_sandbox_active: bool,
     side_conversation_active: bool,
+    prompt_mode: ComposerPromptMode,
+    prompt_mode_available: bool,
     history_search: Option<HistorySearchSession>,
     submit_keys: Vec<KeyBinding>,
     queue_keys: Vec<KeyBinding>,
@@ -580,6 +603,8 @@ impl ChatComposer {
             personality_command_enabled: false,
             windows_degraded_sandbox_active: false,
             side_conversation_active: false,
+            prompt_mode: ComposerPromptMode::Inactive,
+            prompt_mode_available: true,
             history_search: None,
             submit_keys: vec![key_hint::plain(KeyCode::Enter)],
             queue_keys: vec![key_hint::plain(KeyCode::Tab)],
@@ -727,6 +752,108 @@ impl ChatComposer {
 
     pub fn set_side_conversation_active(&mut self, active: bool) {
         self.side_conversation_active = active;
+        if active {
+            self.prompt_mode = ComposerPromptMode::Inactive;
+        }
+    }
+
+    pub(crate) fn prompt_mode(&self) -> ComposerPromptMode {
+        self.prompt_mode
+    }
+
+    pub(crate) fn set_prompt_mode(&mut self, mode: ComposerPromptMode) {
+        self.prompt_mode = mode;
+        self.footer.mode = reset_mode_after_activity(self.footer.mode);
+        if mode != ComposerPromptMode::Inactive {
+            self.history_search = None;
+            self.draft.is_bash_mode = false;
+            self.draft.paste_burst.clear_window_after_non_char();
+        }
+        self.sync_popups();
+    }
+
+    pub(crate) fn set_prompt_mode_available(&mut self, available: bool) {
+        self.prompt_mode_available = available;
+        if !available && self.prompt_mode == ComposerPromptMode::Hash {
+            self.prompt_mode = ComposerPromptMode::Inactive;
+        }
+    }
+
+    pub(crate) fn record_prompt_history(&mut self, text: String) {
+        if !text.trim().is_empty() {
+            // Prompt 历史是优化线程的原样文本，不应复用普通会话历史的 mention 解码，
+            // 否则 `[$name](...)` 等提示词内容会在上下键切换时被改写。
+            self.history.record_local_submission(HistoryEntry {
+                text,
+                text_elements: Vec::new(),
+                local_image_paths: Vec::new(),
+                remote_image_urls: Vec::new(),
+                mention_bindings: Vec::new(),
+                pending_pastes: Vec::new(),
+            });
+        }
+    }
+
+    /// Prompt mode owns Enter and slash-like text so the optimization thread receives the exact
+    /// draft the user typed. Without this short circuit, an optimized prompt containing `/...`
+    /// could accidentally dispatch a normal slash command before reaching the Prompt agent.
+    fn handle_prompt_key_event(&mut self, key_event: KeyEvent) -> Option<(InputResult, bool)> {
+        let mode = self.prompt_mode;
+        if mode == ComposerPromptMode::Inactive {
+            return None;
+        }
+
+        if key_event.code == KeyCode::Esc
+            && matches!(key_event.kind, KeyEventKind::Press | KeyEventKind::Repeat)
+        {
+            self.set_prompt_mode(ComposerPromptMode::Inactive);
+            return Some((InputResult::PromptCancelled { mode }, true));
+        }
+
+        let ctrl_enter = key_event.code == KeyCode::Enter
+            && key_event.modifiers.contains(KeyModifiers::CONTROL)
+            && matches!(key_event.kind, KeyEventKind::Press | KeyEventKind::Repeat);
+        let plain_enter = self.submit_keys.is_pressed(key_event);
+        if ctrl_enter || plain_enter {
+            let text = self.current_text_with_pending().trim().to_string();
+            if text.is_empty() {
+                return Some((InputResult::None, true));
+            }
+            self.record_prompt_history(text.clone());
+            self.set_text_content(String::new(), Vec::new(), Vec::new());
+            if ctrl_enter {
+                self.set_prompt_mode(ComposerPromptMode::Inactive);
+            }
+            return Some((
+                InputResult::PromptSubmitted {
+                    text,
+                    // Ctrl+Enter always leaves Prompt mode; plain Enter continues the isolated
+                    // thread and lets App decide whether this is the first or a later turn.
+                    submit: ctrl_enter,
+                    mode,
+                },
+                true,
+            ));
+        }
+
+        let history_up_pressed = self.editor_keymap.move_up.is_pressed(key_event);
+        let history_down_pressed = self.editor_keymap.move_down.is_pressed(key_event);
+        if history_up_pressed || history_down_pressed {
+            // Prompt 模式的上下键就是“历史提示词切换”，不沿用普通编辑器的光标边界门槛；
+            // 这样模型刚回填一段新文本后，用户仍能直接按 Up 找到上一轮输入。
+            let entry = if history_up_pressed {
+                self.history.navigate_up(&self.app_event_tx)
+            } else {
+                self.history.navigate_down(&self.app_event_tx)
+            };
+            if let Some(entry) = entry {
+                self.apply_history_entry(entry);
+                return Some((InputResult::None, true));
+            }
+            return Some(self.handle_input_basic(key_event));
+        }
+
+        Some(self.handle_input_basic(key_event))
     }
 
     /// Compatibility shim for tests that still toggle the removed steer mode flag.
@@ -1279,6 +1406,24 @@ impl ChatComposer {
         self.sync_popups();
     }
 
+    /// Replace Prompt-mode text without interpreting shell or slash syntax.
+    ///
+    /// Prompt optimization edits are model output, not a normal main-thread draft. In particular,
+    /// a leading `!` must remain visible text instead of becoming shell-mode state, and `/...`
+    /// must not create a command element or popup while the isolated prompt thread is active.
+    pub(crate) fn set_prompt_text_content(&mut self, text: String) {
+        self.draft.textarea.set_text_clearing_elements("");
+        self.draft.is_bash_mode = false;
+        self.draft.pending_pastes.clear();
+        self.draft.mention_bindings.clear();
+        self.attachments
+            .reset_local_images(Vec::new(), &mut self.draft.textarea);
+        self.attachments.clear_remote_image_urls();
+        self.draft.textarea.set_text_clearing_elements(&text);
+        self.draft.textarea.set_cursor(/*pos*/ 0);
+        self.sync_popups();
+    }
+
     fn current_cursor(&self) -> usize {
         self.draft.textarea.cursor() + if self.draft.is_bash_mode { 1 } else { 0 }
     }
@@ -1462,6 +1607,13 @@ impl ChatComposer {
             mention_bindings,
             pending_pastes,
         } = entry;
+        if self.prompt_mode != ComposerPromptMode::Inactive {
+            // Prompt 历史只需要原样切换文本；复用普通恢复路径会把首字符 `!` 重新解释成
+            // shell 模式，导致优化提示词在上下翻历史时悄悄改变语义。
+            self.set_prompt_text_content(text);
+            self.move_cursor_to_history_entry_end();
+            return;
+        }
         self.set_remote_image_urls(remote_image_urls);
         self.set_text_content_with_mention_bindings(
             text,
@@ -1662,6 +1814,10 @@ impl ChatComposer {
 
         if matches!(key_event.kind, KeyEventKind::Release) {
             return (InputResult::None, false);
+        }
+
+        if let Some(result) = self.handle_prompt_key_event(key_event) {
+            return result;
         }
 
         if self.history_search.is_some() {
@@ -2770,6 +2926,8 @@ impl ChatComposer {
             result,
             InputResult::Submitted { .. }
                 | InputResult::Queued { .. }
+                | InputResult::PromptSubmitted { .. }
+                | InputResult::PromptCancelled { .. }
                 | InputResult::Command(_)
                 | InputResult::ServiceTierCommand(_)
                 | InputResult::CommandWithArgs(_, _, _)
@@ -3099,6 +3257,35 @@ impl ChatComposer {
             self.draft.textarea.enter_vim_insert_mode();
             return (InputResult::None, true);
         }
+        if self.prompt_mode_available
+            && self.prompt_mode == ComposerPromptMode::Inactive
+            && self.is_empty()
+            && (matches!(
+                key_event,
+                KeyEvent {
+                    code: KeyCode::Char('#'),
+                    modifiers,
+                    kind: KeyEventKind::Press | KeyEventKind::Repeat,
+                    ..
+                } if modifiers.is_empty() || modifiers == KeyModifiers::SHIFT
+            ) || matches!(
+                key_event,
+                KeyEvent {
+                    // Windows console and some terminal keyboard protocols report Shift+3 as the
+                    // physical digit plus SHIFT instead of the resolved '#' character.
+                    code: KeyCode::Char('3'),
+                    modifiers: KeyModifiers::SHIFT,
+                    kind: KeyEventKind::Press | KeyEventKind::Repeat,
+                    ..
+                }
+            ))
+        {
+            // # 仅作为空草稿的模式入口，不写入正文；side 子线程存在时由 App 关闭该能力，
+            // 因此同一个字符在那个场景下仍会按普通文本插入。
+            self.set_prompt_mode(ComposerPromptMode::Hash);
+            self.draft.textarea.enter_vim_insert_mode();
+            return (InputResult::None, true);
+        }
         if self.draft.textarea.is_vim_normal_mode()
             && self.is_empty()
             && matches!(
@@ -3407,6 +3594,9 @@ impl ChatComposer {
     }
 
     fn sync_bash_mode_from_text(&mut self) {
+        if self.prompt_mode != ComposerPromptMode::Inactive {
+            return;
+        }
         if !self.draft.is_bash_mode && self.draft.textarea.text().starts_with('!') {
             self.draft.textarea.replace_range(0..1, "");
             self.draft.is_bash_mode = true;
@@ -3541,6 +3731,20 @@ impl ChatComposer {
     }
 
     pub(crate) fn sync_popups(&mut self) {
+        if self.prompt_mode != ComposerPromptMode::Inactive {
+            // Prompt 子线程中的输入是纯文本协议；清掉已有搜索状态后直接退出，避免 slash、
+            // 文件和 mention popup 从主线程编辑器规则中漏进隔离 Prompt 流程。
+            if self.popups.current_file_query.is_some() {
+                self.app_event_tx
+                    .send(AppEvent::StartFileSearch(String::new()));
+                self.popups.current_file_query = None;
+            }
+            self.popups.active = ActivePopup::None;
+            self.popups.dismissed_command_token = None;
+            self.popups.dismissed_file_token = None;
+            self.popups.dismissed_mention_token = None;
+            return;
+        }
         self.sync_slash_command_elements();
         if self.history_search.is_some() {
             if self.popups.current_file_query.is_some() {
@@ -4194,7 +4398,7 @@ impl ChatComposer {
             .unwrap_or_else(|| footer_height(&footer_props));
         let footer_spacing = Self::footer_spacing(footer_hint_height);
         let footer_total_height = footer_hint_height + footer_spacing;
-        const COLS_WITH_MARGIN: u16 = LIVE_PREFIX_COLS + INPUT_MARKER_OFFSET_COLS + 1;
+        const COLS_WITH_MARGIN: u16 = LIVE_PREFIX_COLS + 1;
         let inner_width =
             width.saturating_sub(COLS_WITH_MARGIN.saturating_add(textarea_right_reserve));
         let remote_images_height: u16 = self
@@ -4592,6 +4796,197 @@ mod tests {
         )
     }
 
+    fn new_prompt_test_composer() -> (ChatComposer, UnboundedReceiver<AppEvent>) {
+        let (tx, rx) = unbounded_channel::<AppEvent>();
+        let sender = AppEventSender::new(tx);
+        (
+            ChatComposer::new(
+                /*has_input_focus*/ true,
+                sender,
+                /*enhanced_keys_supported*/ false,
+                "Ask Codex to do anything".to_string(),
+                /*disable_paste_burst*/ true,
+            ),
+            rx,
+        )
+    }
+
+    #[test]
+    fn hash_mode_submits_exact_text_without_hash_or_slash_popup() {
+        let (mut composer, _rx) = new_prompt_test_composer();
+
+        let (result, needs_redraw) =
+            composer.handle_key_event(KeyEvent::new(KeyCode::Char('#'), KeyModifiers::NONE));
+        assert_eq!(result, InputResult::None);
+        assert!(needs_redraw);
+        assert_eq!(composer.prompt_mode(), ComposerPromptMode::Hash);
+        assert_eq!(composer.current_text(), "");
+
+        composer.insert_str("/diff inspect this");
+        assert_eq!(composer.current_text(), "/diff inspect this");
+        assert!(!composer.popup_active());
+
+        let (result, _needs_redraw) =
+            composer.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+        assert_eq!(
+            result,
+            InputResult::PromptSubmitted {
+                text: "/diff inspect this".to_string(),
+                submit: false,
+                mode: ComposerPromptMode::Hash,
+            }
+        );
+        assert_eq!(composer.prompt_mode(), ComposerPromptMode::Hash);
+    }
+
+    #[test]
+    fn hash_mode_accepts_shifted_terminal_encodings() {
+        for key_event in [
+            KeyEvent::new(KeyCode::Char('#'), KeyModifiers::SHIFT),
+            KeyEvent::new(KeyCode::Char('3'), KeyModifiers::SHIFT),
+        ] {
+            let (mut composer, _rx) = new_prompt_test_composer();
+
+            let (result, needs_redraw) = composer.handle_key_event(key_event);
+
+            assert_eq!(result, InputResult::None);
+            assert!(needs_redraw);
+            assert_eq!(composer.prompt_mode(), ComposerPromptMode::Hash);
+            assert_eq!(composer.current_text(), "");
+        }
+    }
+
+    #[test]
+    fn hash_ctrl_enter_submits_as_a_normal_turn_and_exits_prompt_mode() {
+        let (mut composer, _rx) = new_prompt_test_composer();
+        composer.set_prompt_mode(ComposerPromptMode::Hash);
+        composer.insert_str("send this normally");
+
+        let (result, _needs_redraw) =
+            composer.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::CONTROL));
+        assert_eq!(
+            result,
+            InputResult::PromptSubmitted {
+                text: "send this normally".to_string(),
+                submit: true,
+                mode: ComposerPromptMode::Hash,
+            }
+        );
+        assert_eq!(composer.prompt_mode(), ComposerPromptMode::Inactive);
+    }
+
+    #[test]
+    fn prompt_thread_enter_continues_and_ctrl_enter_returns_to_main() {
+        let (mut composer, _rx) = new_prompt_test_composer();
+        composer.set_prompt_mode(ComposerPromptMode::Thread);
+        composer.insert_str("clarify the requirements");
+
+        let (result, _needs_redraw) =
+            composer.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+        assert_eq!(
+            result,
+            InputResult::PromptSubmitted {
+                text: "clarify the requirements".to_string(),
+                submit: false,
+                mode: ComposerPromptMode::Thread,
+            }
+        );
+        assert_eq!(composer.prompt_mode(), ComposerPromptMode::Thread);
+
+        composer.insert_str("final optimized prompt");
+        let (result, _needs_redraw) =
+            composer.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::CONTROL));
+        assert_eq!(
+            result,
+            InputResult::PromptSubmitted {
+                text: "final optimized prompt".to_string(),
+                submit: true,
+                mode: ComposerPromptMode::Thread,
+            }
+        );
+        assert_eq!(composer.prompt_mode(), ComposerPromptMode::Inactive);
+    }
+
+    #[test]
+    fn prompt_thread_escape_cancels_without_dispatching_a_turn() {
+        let (mut composer, _rx) = new_prompt_test_composer();
+        composer.set_prompt_mode(ComposerPromptMode::Thread);
+        composer.insert_str("discard this rewrite");
+
+        let (result, _needs_redraw) =
+            composer.handle_key_event(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
+        assert_eq!(
+            result,
+            InputResult::PromptCancelled {
+                mode: ComposerPromptMode::Thread,
+            }
+        );
+        assert_eq!(composer.prompt_mode(), ComposerPromptMode::Inactive);
+    }
+
+    #[test]
+    fn prompt_thread_history_uses_up_and_down_for_prompt_versions() {
+        let (mut composer, _rx) = new_prompt_test_composer();
+        composer.set_prompt_mode(ComposerPromptMode::Thread);
+        composer.record_prompt_history("first draft".to_string());
+        composer.record_prompt_history("second draft".to_string());
+
+        for (key, expected) in [
+            (KeyCode::Up, "second draft"),
+            (KeyCode::Up, "first draft"),
+            (KeyCode::Down, "second draft"),
+            (KeyCode::Down, ""),
+        ] {
+            let (result, needs_redraw) =
+                composer.handle_key_event(KeyEvent::new(key, KeyModifiers::NONE));
+            assert_eq!(result, InputResult::None);
+            assert!(needs_redraw);
+            assert_eq!(composer.current_text(), expected);
+        }
+    }
+
+    #[test]
+    fn prompt_history_preserves_link_like_text_verbatim() {
+        let (mut composer, _rx) = new_prompt_test_composer();
+        composer.set_prompt_mode(ComposerPromptMode::Thread);
+        let text = "Keep [$name](plugin://name) and @literal text unchanged";
+        composer.record_prompt_history(text.to_string());
+
+        let (result, needs_redraw) =
+            composer.handle_key_event(KeyEvent::new(KeyCode::Up, KeyModifiers::NONE));
+        assert_eq!(result, InputResult::None);
+        assert!(needs_redraw);
+        assert_eq!(composer.current_text(), text);
+    }
+
+    #[test]
+    fn prompt_text_replacement_keeps_bang_plain_and_popups_disabled() {
+        let (mut composer, _rx) = new_prompt_test_composer();
+        composer.set_prompt_mode(ComposerPromptMode::Thread);
+
+        composer.set_prompt_text_content("!echo must stay text".to_string());
+        assert_eq!(composer.current_text(), "!echo must stay text");
+        assert!(!composer.draft.is_bash_mode);
+        assert!(!composer.popup_active());
+
+        composer.set_prompt_text_content("/diff must stay text".to_string());
+        assert_eq!(composer.current_text(), "/diff must stay text");
+        assert!(!composer.popup_active());
+    }
+
+    #[test]
+    fn hash_is_literal_text_when_prompt_mode_is_unavailable() {
+        let (mut composer, _rx) = new_prompt_test_composer();
+        composer.set_prompt_mode_available(/*available*/ false);
+
+        let (result, _needs_redraw) =
+            composer.handle_key_event(KeyEvent::new(KeyCode::Char('#'), KeyModifiers::NONE));
+        assert_eq!(result, InputResult::None);
+        assert_eq!(composer.prompt_mode(), ComposerPromptMode::Inactive);
+        assert_eq!(composer.current_text(), "#");
+        assert!(!composer.popup_active());
+    }
+
     #[test]
     fn footer_hint_row_is_separated_from_composer() {
         let (tx, _rx) = unbounded_channel::<AppEvent>();
@@ -4926,30 +5321,6 @@ mod tests {
         composer.set_text_content("! git".to_string(), Vec::new(), Vec::new());
         composer.move_cursor_to_end();
         assert_eq!(composer.cursor_pos(area), Some((7, 1)));
-    }
-
-    #[test]
-    fn input_marker_has_balanced_spacing() {
-        let (tx, _rx) = unbounded_channel::<AppEvent>();
-        let sender = AppEventSender::new(tx);
-        let mut composer = ChatComposer::new(
-            /*has_input_focus*/ true,
-            sender,
-            /*enhanced_keys_supported*/ false,
-            "Ask Codex to do anything".to_string(),
-            /*disable_paste_burst*/ false,
-        );
-        composer.set_text_content("hello".to_string(), Vec::new(), Vec::new());
-
-        let area = Rect::new(0, 0, 40, 5);
-        let mut buf = Buffer::empty(area);
-        composer.render(area, &mut buf);
-
-        // 标记左右各保留一列空白，输入文本和光标从同一个新的 textarea 起点开始。
-        assert_eq!(buf[(0, 1)].symbol(), " ");
-        assert_eq!(buf[(1, 1)].symbol(), "›");
-        assert_eq!(buf[(2, 1)].symbol(), " ");
-        assert_eq!(buf[(3, 1)].symbol(), "h");
     }
 
     #[test]
@@ -9101,6 +9472,9 @@ mod tests {
             InputResult::Queued { .. } => {
                 panic!("expected command dispatch, but composer queued literal text")
             }
+            InputResult::PromptSubmitted { .. } | InputResult::PromptCancelled { .. } => {
+                panic!("expected command dispatch, but composer entered Prompt mode")
+            }
             InputResult::None => panic!("expected Command result for '/init'"),
         }
         assert!(
@@ -9608,6 +9982,9 @@ mod tests {
             InputResult::Queued { .. } => {
                 panic!("expected command dispatch after Tab completion, got literal queue")
             }
+            InputResult::PromptSubmitted { .. } | InputResult::PromptCancelled { .. } => {
+                panic!("expected command dispatch after Tab completion, got Prompt mode")
+            }
             InputResult::None => panic!("expected Command result for '/diff'"),
         }
         assert!(composer.draft.textarea.is_empty());
@@ -9804,6 +10181,9 @@ mod tests {
             }
             InputResult::Queued { .. } => {
                 panic!("expected command dispatch, but composer queued literal text")
+            }
+            InputResult::PromptSubmitted { .. } | InputResult::PromptCancelled { .. } => {
+                panic!("expected command dispatch, but composer entered Prompt mode")
             }
             InputResult::None => panic!("expected Command result for '/mention'"),
         }

@@ -442,7 +442,7 @@ impl App {
             };
             self.chat_widget.add_info_message(message, /*hint*/ None);
         }
-        self.drain_active_thread_events(tui).await?;
+        self.drain_active_thread_events(tui, app_server).await?;
         self.refresh_pending_thread_approvals().await;
 
         Ok(())
@@ -483,6 +483,8 @@ impl App {
         self.thread_event_channels.clear();
         self.agent_navigation.clear();
         self.side_threads.clear();
+        self.prompt_thread = None;
+        self.prompt_starting = None;
         self.active_thread_id = None;
         self.active_thread_rx = None;
         self.primary_thread_id = None;

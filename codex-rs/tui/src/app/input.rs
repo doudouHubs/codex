@@ -95,6 +95,13 @@ impl App {
         app_server: &mut AppServerSession,
         key_event: KeyEvent,
     ) {
+        if self.is_active_prompt_thread() {
+            // Prompt 子线程是完全隔离的编辑面：全局 agent/side/backtrack 快捷键不能穿透，
+            // 否则用户在优化过程中按方向键或 Ctrl+Enter 可能误切换普通线程。
+            self.chat_widget.handle_key_event(key_event);
+            return;
+        }
+
         // Some terminals, especially on macOS, encode Option+Left/Right as Option+b/f unless
         // enhanced keyboard reporting is available. We only treat those word-motion fallbacks as
         // agent-switch shortcuts when the composer is empty so we never steal the expected
@@ -143,6 +150,24 @@ impl App {
         }
 
         let app_keymap_shortcuts_available = self.app_keymap_shortcuts_available();
+
+        if app_keymap_shortcuts_available && side_toggle_shortcut_matches(key_event) {
+            if let Some(target_thread_id) = self.side_toggle_target_thread_id() {
+                // 普通线程切换会先保存当前 ChatWidget 的 ThreadInputState，因此 main 和 side
+                // 的未提交草稿可以分别保留；这里不能调用会销毁 side 的清理路径。
+                let _ = self
+                    .select_agent_thread(tui, app_server, target_thread_id)
+                    .await;
+            } else if self.side_start_block_message().is_none()
+                && self.chat_widget.can_start_side_conversation()
+                && let Some(parent_thread_id) = self.current_displayed_thread_id()
+            {
+                // 复用空 `/btw` 的事件入口，不读取或提交当前线程草稿，并保持启动状态提示一致。
+                self.chat_widget
+                    .request_side_conversation(parent_thread_id, /*user_message*/ None);
+            }
+            return;
+        }
 
         if app_keymap_shortcuts_available && self.keymap.app.toggle_vim_mode.is_pressed(key_event) {
             self.chat_widget.toggle_vim_mode_and_notify();
@@ -289,7 +314,10 @@ impl App {
 
 #[cfg(test)]
 mod tests {
+    use super::super::SideThreadState;
     use super::super::test_support::make_test_app;
+    use crate::rules_sidebar::RulesSidebarState;
+    use codex_protocol::ThreadId;
 
     #[tokio::test]
     async fn app_keymap_shortcuts_are_disabled_while_keymap_view_is_active() {
@@ -313,5 +341,24 @@ mod tests {
         ));
 
         assert!(app.app_keymap_shortcuts_available());
+    }
+
+    #[tokio::test]
+    async fn side_toggle_target_thread_id_finds_main_and_side_pair() {
+        let mut app = make_test_app().await;
+        let main_thread_id = ThreadId::new();
+        let side_thread_id = ThreadId::new();
+        app.primary_thread_id = Some(main_thread_id);
+        app.side_threads
+            .insert(side_thread_id, SideThreadState::new(main_thread_id));
+
+        app.active_thread_id = Some(main_thread_id);
+        assert_eq!(app.side_toggle_target_thread_id(), Some(side_thread_id));
+
+        app.active_thread_id = Some(side_thread_id);
+        assert_eq!(app.side_toggle_target_thread_id(), Some(main_thread_id));
+
+        app.active_thread_id = Some(ThreadId::new());
+        assert_eq!(app.side_toggle_target_thread_id(), None);
     }
 }

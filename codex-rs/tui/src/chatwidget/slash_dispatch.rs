@@ -101,7 +101,7 @@ impl ChatWidget {
         }
     }
 
-    fn request_side_conversation(
+    pub(crate) fn request_side_conversation(
         &mut self,
         parent_thread_id: ThreadId,
         user_message: Option<UserMessage>,

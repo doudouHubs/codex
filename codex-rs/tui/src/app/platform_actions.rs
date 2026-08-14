@@ -1,7 +1,7 @@
 //! Platform-specific app actions and small global shortcuts.
 //!
-//! This module owns platform state used by `App`, the side-conversation return shortcut predicate,
-//! and Windows sandbox helper actions that are compiled only on Windows.
+//! This module owns platform state used by `App`, the side-conversation shortcut predicates, and
+//! Windows sandbox helper actions that are compiled only on Windows.
 
 use super::*;
 
@@ -73,6 +73,21 @@ pub(super) fn side_return_shortcut_matches(key_event: KeyEvent) -> bool {
     )
 }
 
+pub(super) fn side_toggle_shortcut_matches(key_event: KeyEvent) -> bool {
+    matches!(
+        key_event,
+        KeyEvent {
+            code: KeyCode::Char(c),
+            modifiers,
+            kind: KeyEventKind::Press,
+            ..
+        } if (modifiers.contains(KeyModifiers::CONTROL)
+            && (c == '/' || c == '7'))
+            // 一些终端会把 Ctrl+/ 的 0x1f 直接作为无修饰控制字符上报。
+            || (c == '\u{001f}' && modifiers.is_empty())
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -103,6 +118,31 @@ mod tests {
         assert!(!side_return_shortcut_matches(KeyEvent::new_with_kind(
             KeyCode::Esc,
             KeyModifiers::NONE,
+            KeyEventKind::Release,
+        )));
+    }
+
+    #[test]
+    fn side_toggle_shortcut_matches_terminal_encodings_of_ctrl_slash() {
+        assert!(side_toggle_shortcut_matches(KeyEvent::new(
+            KeyCode::Char('/'),
+            KeyModifiers::CONTROL,
+        )));
+        assert!(side_toggle_shortcut_matches(KeyEvent::new(
+            KeyCode::Char('7'),
+            KeyModifiers::CONTROL,
+        )));
+        assert!(side_toggle_shortcut_matches(KeyEvent::new(
+            KeyCode::Char('\u{001f}'),
+            KeyModifiers::NONE,
+        )));
+        assert!(!side_toggle_shortcut_matches(KeyEvent::new(
+            KeyCode::Char('/'),
+            KeyModifiers::NONE,
+        )));
+        assert!(!side_toggle_shortcut_matches(KeyEvent::new_with_kind(
+            KeyCode::Char('/'),
+            KeyModifiers::CONTROL,
             KeyEventKind::Release,
         )));
     }
