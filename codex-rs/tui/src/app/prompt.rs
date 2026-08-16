@@ -328,10 +328,26 @@ impl App {
         self.refresh_in_memory_config_from_disk_best_effort("starting prompt optimization")
             .await;
 
-        let forked = match app_server
-            .fork_thread_for_prompt(self.prompt_fork_config(), parent_thread_id)
-            .await
-        {
+        // 刚启动的主线程虽然已有 id，但还没有持久化 rollout；fork 要求该 rollout 存在，
+        // 所以在主线程收到首个 turn 前直接创建隔离 Prompt 线程，有历史后继续 fork 以保留上下文。
+        let parent_has_history = self
+            .thread_event_channels
+            .get(&parent_thread_id)
+            .map(|channel| Arc::clone(&channel.store));
+        let parent_has_history = match parent_has_history {
+            Some(store) => !store.lock().await.turns.is_empty(),
+            None => false,
+        };
+        let prompt_config = self.prompt_fork_config();
+        let child = if parent_has_history {
+            app_server
+                .fork_thread_for_prompt(prompt_config, parent_thread_id)
+                .await
+        } else {
+            app_server.start_thread_for_prompt(&prompt_config).await
+        };
+
+        let forked = match child {
             Ok(forked) => forked,
             Err(err) => {
                 self.prompt_starting = None;

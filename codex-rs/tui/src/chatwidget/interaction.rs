@@ -3,6 +3,10 @@
 use super::*;
 use crate::bottom_pane::ComposerPromptMode;
 use crate::bottom_pane::LocalImageAttachment;
+use crossterm::event::MouseButton;
+use crossterm::event::MouseEvent;
+use crossterm::event::MouseEventKind;
+use ratatui::layout::Rect;
 
 impl ChatWidget {
     /// Rebuild image elements from their visible placeholders after a Prompt draft crosses the
@@ -23,6 +27,31 @@ impl ChatWidget {
                 })
             })
             .collect()
+    }
+
+    pub(crate) fn handle_mouse_event(&mut self, area: Rect, event: MouseEvent) {
+        if !matches!(event.kind, MouseEventKind::Down(MouseButton::Left)) {
+            return;
+        }
+
+        // 视图层拥有弹窗和模态交互；主 composer 只能在没有活动 view 时接收点击，避免事件
+        // 穿透到底层输入框而改变用户当前正在处理的审批或选择界面。
+        let Some(bottom_pane_area) = self.as_renderable().hit_test(area, event.column, event.row)
+        else {
+            return;
+        };
+        let right_reserve = self.ambient_pet_wrap_reserved_cols();
+        let moved = self
+            .bottom_pane
+            .set_cursor_from_mouse_with_composer_right_reserve(
+                bottom_pane_area,
+                event.column,
+                event.row,
+                right_reserve,
+            );
+        if moved {
+            self.request_redraw();
+        }
     }
 
     pub(crate) fn handle_key_event(&mut self, key_event: KeyEvent) {

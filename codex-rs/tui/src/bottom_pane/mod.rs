@@ -1807,6 +1807,21 @@ impl BottomPane {
             .cursor_pos(area)
     }
 
+    pub(crate) fn set_cursor_from_mouse_with_composer_right_reserve(
+        &mut self,
+        area: Rect,
+        x: u16,
+        y: u16,
+        composer_right_reserve: u16,
+    ) -> bool {
+        if !self.view_stack.is_empty() {
+            return false;
+        }
+
+        self.composer
+            .set_cursor_from_mouse_with_textarea_right_reserve(area, x, y, composer_right_reserve)
+    }
+
     pub(crate) fn cursor_style_with_composer_right_reserve(
         &self,
         area: Rect,
@@ -1907,6 +1922,7 @@ mod tests {
     use crate::status_indicator_widget::StatusDetailsCapitalization;
     use crate::test_support::PathBufExt;
     use crate::test_support::test_path_buf;
+    use crate::ui_consts::LIVE_PREFIX_COLS;
     use codex_app_server_protocol::CommandExecutionApprovalDecision;
     use crossterm::event::KeyCode;
     use crossterm::event::KeyEvent;
@@ -3122,5 +3138,33 @@ mod tests {
         let area = Rect::new(0, 0, 40, pane.desired_height(/*width*/ 40).max(2));
         assert!(pane.cursor_pos(area).is_some());
         assert_eq!(lower_view_handle_calls.get(), 0);
+    }
+
+    #[test]
+    fn mouse_click_moves_composer_cursor_but_does_not_cross_active_view() {
+        let (tx_raw, _rx) = unbounded_channel::<AppEvent>();
+        let tx = AppEventSender::new(tx_raw);
+        let mut pane = test_pane(tx);
+        pane.set_composer_text("abcd".to_string(), Vec::new(), Vec::new());
+
+        let area = Rect::new(0, 0, 40, pane.desired_height(/*width*/ 40).max(2));
+        let text_start_x = area.x + LIVE_PREFIX_COLS + 1;
+        let text_start_y = area.y + 1;
+        assert!(pane.set_cursor_from_mouse_with_composer_right_reserve(
+            area,
+            text_start_x + 1,
+            text_start_y,
+            /*composer_right_reserve*/ 0,
+        ));
+        assert_eq!(pane.composer.cursor(), 1);
+
+        pane.push_view(Box::new(CompletingView::default()));
+        assert!(!pane.set_cursor_from_mouse_with_composer_right_reserve(
+            area,
+            text_start_x + 3,
+            text_start_y,
+            /*composer_right_reserve*/ 0,
+        ));
+        assert_eq!(pane.composer.cursor(), 1);
     }
 }

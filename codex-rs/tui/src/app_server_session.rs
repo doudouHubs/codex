@@ -481,17 +481,36 @@ impl AppServerSession {
         config: &Config,
         session_start_source: Option<ThreadStartSource>,
     ) -> Result<AppServerStartedThread> {
+        self.start_thread_with_mode(config, session_start_source, None)
+            .await
+    }
+
+    pub(crate) async fn start_thread_for_prompt(
+        &mut self,
+        config: &Config,
+    ) -> Result<AppServerStartedThread> {
+        self.start_thread_with_mode(config, None, Some(ThreadMode::PromptOptimization))
+            .await
+    }
+
+    async fn start_thread_with_mode(
+        &mut self,
+        config: &Config,
+        session_start_source: Option<ThreadStartSource>,
+        thread_mode: Option<ThreadMode>,
+    ) -> Result<AppServerStartedThread> {
         let request_id = self.next_request_id();
         let session_config = self.session_config_with_effective_service_tier(config);
         let response: ThreadStartResponse = self
             .client
             .request_typed(ClientRequest::ThreadStart {
                 request_id,
-                params: thread_start_params_from_config(
+                params: thread_start_params_from_config_with_mode(
                     &session_config,
                     self.thread_params_mode(),
                     self.remote_cwd_override.as_deref(),
                     session_start_source,
+                    thread_mode,
                 ),
             })
             .await
@@ -1498,6 +1517,22 @@ fn thread_start_params_from_config(
     remote_cwd_override: Option<&std::path::Path>,
     session_start_source: Option<ThreadStartSource>,
 ) -> ThreadStartParams {
+    thread_start_params_from_config_with_mode(
+        config,
+        thread_params_mode,
+        remote_cwd_override,
+        session_start_source,
+        None,
+    )
+}
+
+fn thread_start_params_from_config_with_mode(
+    config: &Config,
+    thread_params_mode: ThreadParamsMode,
+    remote_cwd_override: Option<&std::path::Path>,
+    session_start_source: Option<ThreadStartSource>,
+    thread_mode: Option<ThreadMode>,
+) -> ThreadStartParams {
     let permissions = permissions_selection_from_config(config, thread_params_mode);
     let sandbox = permissions
         .is_none()
@@ -1520,11 +1555,18 @@ fn thread_start_params_from_config(
         permissions,
         config: config_request_overrides_from_config(config),
         ephemeral: Some(config.ephemeral),
+        thread_mode,
         session_start_source,
         thread_source: Some(ThreadSource::User),
-        developer_instructions: with_terminal_visualization_instructions(
-            config, /*control_instructions*/ None,
-        ),
+        developer_instructions: match thread_mode {
+            Some(_) => with_terminal_visualization_instructions(
+                config,
+                config.developer_instructions.clone(),
+            ),
+            None => {
+                with_terminal_visualization_instructions(config, /*control_instructions*/ None)
+            }
+        },
         ..ThreadStartParams::default()
     }
 }
@@ -2021,6 +2063,27 @@ mod tests {
         );
         assert_eq!(params.model_provider, Some(config.model_provider_id));
         assert_eq!(params.thread_source, Some(ThreadSource::User));
+    }
+
+    #[tokio::test]
+    async fn prompt_thread_start_params_forward_mode_and_instructions() {
+        let temp_dir = tempfile::tempdir().expect("tempdir");
+        let mut config = build_config(&temp_dir).await;
+        config.developer_instructions = Some("Developer override.".to_string());
+
+        let params = thread_start_params_from_config_with_mode(
+            &config,
+            ThreadParamsMode::Embedded,
+            /*remote_cwd_override*/ None,
+            /*session_start_source*/ None,
+            Some(ThreadMode::PromptOptimization),
+        );
+
+        assert_eq!(params.thread_mode, Some(ThreadMode::PromptOptimization));
+        assert_eq!(
+            params.developer_instructions.as_deref(),
+            Some("Developer override.")
+        );
     }
 
     #[tokio::test]

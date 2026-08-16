@@ -46,7 +46,7 @@ pub enum ThreadStartSource {
     Clear,
 }
 
-/// Selects the runtime capability profile for a forked thread.
+/// Selects the runtime capability profile for a new or forked thread.
 ///
 /// `Standard` preserves the normal Agent runtime. `PromptOptimization` is a
 /// temporary, read-only thread that only exposes capabilities needed to
@@ -119,6 +119,10 @@ pub struct ThreadStartParams {
     pub multi_agent_mode: Option<MultiAgentMode>,
     #[ts(optional = nullable)]
     pub ephemeral: Option<bool>,
+    /// 选择新线程使用的 runtime 能力配置。
+    #[experimental("thread/start.threadMode")]
+    #[ts(optional = nullable)]
+    pub thread_mode: Option<ThreadMode>,
     /// Persisted thread history contract to use for this new thread.
     #[experimental("thread/start.historyMode")]
     #[ts(optional = nullable)]

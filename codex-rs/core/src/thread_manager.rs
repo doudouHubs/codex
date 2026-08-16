@@ -704,10 +704,43 @@ impl ThreadManager {
             .await
     }
 
+    /// 启动一个临时只读线程，并使用精简的 Prompt 优化 runtime。
+    ///
+    /// 这是 `fork_thread_from_history_for_prompt` 的无历史版本，供源线程尚未产生持久化
+    /// rollout 时使用。
+    pub async fn start_thread_with_options_for_prompt(
+        &self,
+        options: StartThreadOptions,
+    ) -> CodexResult<NewThread> {
+        self.start_thread_with_options_and_modes(
+            options,
+            /*forked_from_thread_id*/ None,
+            McpRuntimeMode::Disabled,
+            ThreadRuntimeMode::PromptOptimization,
+        )
+        .await
+    }
+
     async fn start_thread_with_options_and_fork_source(
         &self,
         options: StartThreadOptions,
         forked_from_thread_id: Option<ThreadId>,
+    ) -> CodexResult<NewThread> {
+        self.start_thread_with_options_and_modes(
+            options,
+            forked_from_thread_id,
+            McpRuntimeMode::Enabled,
+            ThreadRuntimeMode::Standard,
+        )
+        .await
+    }
+
+    async fn start_thread_with_options_and_modes(
+        &self,
+        options: StartThreadOptions,
+        forked_from_thread_id: Option<ThreadId>,
+        mcp_runtime_mode: McpRuntimeMode,
+        thread_runtime_mode: ThreadRuntimeMode,
     ) -> CodexResult<NewThread> {
         let agent_control = self.agent_control_for_config(&options.config);
         let (resumed_session_source, resumed_thread_source) = options
@@ -736,8 +769,8 @@ impl ThreadManager {
             options.thread_extension_init,
             options.supports_openai_form_elicitation,
             /*user_shell_override*/ None,
-            McpRuntimeMode::Enabled,
-            ThreadRuntimeMode::Standard,
+            mcp_runtime_mode,
+            thread_runtime_mode,
         ))
         .await
     }

@@ -960,11 +960,24 @@ impl ThreadRequestProcessor {
             personality,
             multi_agent_mode: _multi_agent_mode,
             ephemeral,
+            thread_mode,
             history_mode,
             session_start_source,
             thread_source,
             environments,
         } = params;
+        let prompt_optimization = matches!(thread_mode, Some(ThreadMode::PromptOptimization));
+        // Prompt 线程只是临时的只读写作沙盒；在 app-server 边界强制这些限制，避免非 TUI
+        // 客户端漏传参数后意外创建可写的完整 runtime。
+        let permissions = prompt_optimization
+            .then(|| codex_protocol::models::BUILT_IN_PERMISSION_PROFILE_READ_ONLY.to_string())
+            .or(permissions);
+        let sandbox = if prompt_optimization { None } else { sandbox };
+        let ephemeral = prompt_optimization.then_some(true).or(ephemeral);
+        let dynamic_tools = prompt_optimization.then_some(Vec::new()).or(dynamic_tools);
+        let selected_capability_roots = prompt_optimization
+            .then_some(Vec::new())
+            .or(selected_capability_roots);
         if matches!(
             history_mode,
             Some(codex_app_server_protocol::ThreadHistoryMode::Paginated)
@@ -1027,6 +1040,7 @@ impl ThreadRequestProcessor {
                 selected_capability_roots.unwrap_or_default(),
                 history_mode.map(Into::into),
                 session_start_source,
+                thread_mode,
                 thread_source.map(Into::into),
                 environments,
                 service_name,
@@ -1104,6 +1118,7 @@ impl ThreadRequestProcessor {
         selected_capability_roots: Vec<SelectedCapabilityRoot>,
         history_mode: Option<ThreadHistoryMode>,
         session_start_source: Option<codex_app_server_protocol::ThreadStartSource>,
+        thread_mode: Option<ThreadMode>,
         thread_source: Option<codex_protocol::protocol::ThreadSource>,
         environment_selections: Option<Vec<TurnEnvironmentSelection>>,
         service_name: Option<String>,
@@ -1220,43 +1235,55 @@ impl ThreadRequestProcessor {
             thread_extension_init.insert(selected_capability_roots);
         }
         let create_thread_started_at = std::time::Instant::now();
+        let start_thread_options = StartThreadOptions {
+            config,
+            allow_provider_model_fallback,
+            initial_history: match session_start_source
+                .unwrap_or(codex_app_server_protocol::ThreadStartSource::Startup)
+            {
+                codex_app_server_protocol::ThreadStartSource::Startup => InitialHistory::New,
+                codex_app_server_protocol::ThreadStartSource::Clear => InitialHistory::Cleared,
+            },
+            history_mode,
+            session_source: None,
+            thread_source,
+            dynamic_tools,
+            metrics_service_name: service_name,
+            parent_trace: request_trace,
+            environments,
+            thread_extension_init,
+            supports_openai_form_elicitation,
+        };
+        let new_thread = async {
+            if matches!(thread_mode, Some(ThreadMode::PromptOptimization)) {
+                listener_task_context
+                    .thread_manager
+                    .start_thread_with_options_for_prompt(start_thread_options)
+                    .await
+            } else {
+                listener_task_context
+                    .thread_manager
+                    .start_thread_with_options(start_thread_options)
+                    .await
+            }
+        }
+        .instrument(tracing::info_span!(
+            "app_server.thread_start.create_thread",
+            otel.name = "app_server.thread_start.create_thread",
+            thread_start.dynamic_tool_count = dynamic_tool_count,
+        ))
+        .await
+        .map_err(|err| match err {
+            CodexErr::InvalidRequest(message) => invalid_request(message),
+            CodexErr::UnsupportedOperation(message) => method_not_found(message),
+            err => internal_error(format!("error creating thread: {err}")),
+        })?;
         let NewThread {
             thread_id,
             thread,
             session_configured,
             ..
-        } = listener_task_context
-            .thread_manager
-            .start_thread_with_options(StartThreadOptions {
-                config,
-                allow_provider_model_fallback,
-                initial_history: match session_start_source
-                    .unwrap_or(codex_app_server_protocol::ThreadStartSource::Startup)
-                {
-                    codex_app_server_protocol::ThreadStartSource::Startup => InitialHistory::New,
-                    codex_app_server_protocol::ThreadStartSource::Clear => InitialHistory::Cleared,
-                },
-                history_mode,
-                session_source: None,
-                thread_source,
-                dynamic_tools,
-                metrics_service_name: service_name,
-                parent_trace: request_trace,
-                environments,
-                thread_extension_init,
-                supports_openai_form_elicitation,
-            })
-            .instrument(tracing::info_span!(
-                "app_server.thread_start.create_thread",
-                otel.name = "app_server.thread_start.create_thread",
-                thread_start.dynamic_tool_count = dynamic_tool_count,
-            ))
-            .await
-            .map_err(|err| match err {
-                CodexErr::InvalidRequest(message) => invalid_request(message),
-                CodexErr::UnsupportedOperation(message) => method_not_found(message),
-                err => internal_error(format!("error creating thread: {err}")),
-            })?;
+        } = new_thread;
         let session_telemetry = thread.session_telemetry();
         session_telemetry.record_startup_phase(
             "thread_start_create_thread",

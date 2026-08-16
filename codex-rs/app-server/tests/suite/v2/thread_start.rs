@@ -22,6 +22,7 @@ use codex_app_server_protocol::ServerNotification;
 use codex_app_server_protocol::TextPosition;
 use codex_app_server_protocol::TextRange;
 use codex_app_server_protocol::ThreadHistoryMode;
+use codex_app_server_protocol::ThreadMode;
 use codex_app_server_protocol::ThreadSource;
 use codex_app_server_protocol::ThreadStartParams;
 use codex_app_server_protocol::ThreadStartResponse;
@@ -1161,6 +1162,37 @@ async fn thread_start_ephemeral_remains_pathless() -> Result<()> {
         "ephemeral threads should serialize `ephemeral: true`"
     );
 
+    Ok(())
+}
+
+#[tokio::test]
+async fn thread_start_prompt_optimization_mode_starts_without_rollout() -> Result<()> {
+    let server = create_mock_responses_server_repeating_assistant("Done").await;
+    let codex_home = TempDir::new()?;
+    create_config_toml_without_approval_policy(codex_home.path(), &server.uri())?;
+
+    let mut mcp = TestAppServer::builder()
+        .with_codex_home(codex_home.path())
+        .build()
+        .await?;
+    timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
+
+    let request_id = mcp
+        .send_thread_start_request_with_auto_env(ThreadStartParams {
+            model: Some("gpt-5.2".to_string()),
+            thread_mode: Some(ThreadMode::PromptOptimization),
+            ..Default::default()
+        })
+        .await?;
+    let response = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(request_id)),
+    )
+    .await??;
+    let ThreadStartResponse { thread, .. } = to_response(response)?;
+
+    assert!(thread.ephemeral);
+    assert_eq!(thread.path, None);
     Ok(())
 }
 

@@ -989,6 +989,38 @@ impl ChatComposer {
             .textarea
             .cursor_pos_with_state(textarea_rect, state)
     }
+
+    pub(crate) fn set_cursor_from_mouse_with_textarea_right_reserve(
+        &mut self,
+        area: Rect,
+        x: u16,
+        y: u16,
+        textarea_right_reserve: u16,
+    ) -> bool {
+        if !self.draft.input_enabled
+            || self.attachments.selected_remote_image_index.is_some()
+            || self.history_search.is_some()
+        {
+            return false;
+        }
+
+        let [_, _, textarea_rect, _] =
+            self.layout_areas_with_textarea_right_reserve(area, textarea_right_reserve);
+        let state = *self.draft.textarea_state.borrow();
+        let Some(cursor) = self
+            .draft
+            .textarea
+            .cursor_from_position(textarea_rect, state, x, y)
+        else {
+            return false;
+        };
+
+        let previous_cursor = self.draft.textarea.cursor();
+        self.draft.textarea.set_cursor(cursor);
+        self.sync_popups();
+        self.draft.textarea.cursor() != previous_cursor
+    }
+
     /// Returns true if the composer currently contains no user-entered input.
     pub(crate) fn is_empty(&self) -> bool {
         self.draft.textarea.is_empty() && !self.draft.is_bash_mode && self.attachments.is_empty()

@@ -1,6 +1,7 @@
 //! Render composition for the main chat widget surface.
 
 use super::*;
+use crate::render::renderable::rect_contains_point;
 
 impl ChatWidget {
     pub(super) fn as_renderable(&self) -> RenderableItem<'_> {
@@ -97,6 +98,10 @@ impl Renderable for BottomPaneComposerReserveRenderable<'_> {
     fn desired_height(&self, width: u16) -> u16 {
         self.bottom_pane
             .desired_height_with_composer_right_reserve(width, self.right_reserve)
+    }
+
+    fn hit_test(&self, area: Rect, x: u16, y: u16) -> Option<Rect> {
+        rect_contains_point(area, x, y).then_some(area)
     }
 
     fn cursor_pos(&self, area: Rect) -> Option<(u16, u16)> {

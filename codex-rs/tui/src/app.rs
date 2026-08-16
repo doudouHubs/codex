@@ -1136,6 +1136,9 @@ See the Codex keymap documentation for supported actions and examples."
             }
         }
 
+        // 普通聊天区也需要登记鼠标捕获请求；物理捕获由 Ctrl 按住期间临时开启，避免默认吞掉终端划选。
+        tui.enable_mouse_capture()?;
+
         let event_stream_started_at = Instant::now();
         let tui_events = tui.event_stream();
         tokio::pin!(tui_events);
@@ -1191,6 +1194,8 @@ See the Codex keymap documentation for supported actions and examples."
         let exit_reason_result = if let Some(exit_reason) = pre_loop_exit_reason {
             Ok(exit_reason)
         } else {
+            let mut mouse_capture_poll = tokio::time::interval(Duration::from_millis(16));
+
             loop {
                 let control = select! {
                     Some(event) = app_event_rx.recv() => {
@@ -1237,6 +1242,11 @@ See the Codex keymap documentation for supported actions and examples."
                                 tracing::warn!("app-server event stream closed");
                             }
                         }
+                        AppRunControl::Continue
+                    }
+                    _ = mouse_capture_poll.tick(), if cfg!(windows) => {
+                        #[cfg(windows)]
+                        tui.sync_mouse_capture_from_os();
                         AppRunControl::Continue
                     }
                 };
@@ -1294,6 +1304,14 @@ See the Codex keymap documentation for supported actions and examples."
         app_server: &mut AppServerSession,
         event: TuiEvent,
     ) -> Result<AppRunControl> {
+        // Ctrl 的独立按下/释放事件必须在 overlay、侧栏和 composer 分流前消费；否则某个
+        // surface 的恢复逻辑可能在用户仍按住 Ctrl 时重新打开终端鼠标捕获。
+        if let TuiEvent::Key(key_event) = &event
+            && tui.handle_control_mouse_capture_event(key_event)
+        {
+            return Ok(AppRunControl::Continue);
+        }
+
         if matches!(event, TuiEvent::Draw | TuiEvent::Resize) {
             self.handle_draw_pre_render(tui)?;
         }
@@ -1308,7 +1326,10 @@ See the Codex keymap documentation for supported actions and examples."
                 TuiEvent::Key(key_event) => {
                     self.handle_key_event(tui, app_server, key_event).await;
                 }
-                TuiEvent::Mouse(_) => {}
+                TuiEvent::Mouse(mouse_event) => {
+                    self.chat_widget
+                        .handle_mouse_event(tui.terminal.viewport_area, mouse_event);
+                }
                 TuiEvent::Paste(pasted) => {
                     // Many terminals convert newlines to \r when pasting (e.g., iTerm2),
                     // but tui-textarea expects \n. Normalize CR to LF.

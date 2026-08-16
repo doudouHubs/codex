@@ -24,7 +24,7 @@ impl App {
         };
         // sidebar 不拥有键盘焦点，禁用 wheel->arrow 转换，避免滚轮误触 composer 输入历史。
         let _ = tui.enter_alt_screen_without_alternate_scroll();
-        // 显式 mouse event 能区分实体方向键，只在侧栏生命周期内启用捕获。
+        // 侧栏需要显式 mouse event 区分滚轮与方向键；主聊天区的捕获由 App::run 生命周期统一管理。
         let _ = tui.enable_mouse_capture();
         self.rules_sidebar_generation = self.rules_sidebar_generation.wrapping_add(1);
         self.rules_sidebar = Some(RulesSidebarState::new(
@@ -43,6 +43,8 @@ impl App {
         }
         self.rules_sidebar_generation = self.rules_sidebar_generation.wrapping_add(1);
         let _ = tui.leave_alt_screen();
+        // 侧栏关闭后回到主聊天区，恢复主 composer 所需的鼠标捕获。
+        let _ = tui.enable_mouse_capture();
         if !self.deferred_history_lines.is_empty() {
             let lines = std::mem::take(&mut self.deferred_history_lines);
             tui.insert_history_hyperlink_lines_with_wrap_policy(

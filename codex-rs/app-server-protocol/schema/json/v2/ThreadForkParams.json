@@ -72,7 +72,7 @@
       "type": "string"
     },
     "ThreadMode": {
-      "description": "Selects the runtime capability profile for a forked thread.\n\n`Standard` preserves the normal Agent runtime. `PromptOptimization` is a temporary, read-only thread that only exposes capabilities needed to inspect context and improve a prompt.",
+      "description": "Selects the runtime capability profile for a new or forked thread.\n\n`Standard` preserves the normal Agent runtime. `PromptOptimization` is a temporary, read-only thread that only exposes capabilities needed to inspect context and improve a prompt.",
       "enum": [
         "standard",
         "promptOptimization"

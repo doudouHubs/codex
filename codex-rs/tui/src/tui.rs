@@ -41,6 +41,8 @@ use tokio::sync::broadcast;
 use tokio_stream::Stream;
 
 pub use self::frame_requester::FrameRequester;
+use self::mouse_capture::MouseCaptureAction;
+use self::mouse_capture::MouseCaptureState;
 use crate::custom_terminal;
 use crate::custom_terminal::Terminal as CustomTerminal;
 use crate::insert_history::HistoryLineWrapPolicy;
@@ -62,6 +64,7 @@ mod frame_requester;
 #[cfg(unix)]
 mod job_control;
 mod keyboard_modes;
+mod mouse_capture;
 mod terminal_stderr;
 #[cfg(test)]
 pub(crate) mod test_support;
@@ -628,6 +631,8 @@ pub struct Tui {
     // Desired input modes are shared with Unix suspend/resume handling.
     alternate_scroll_enabled: Arc<AtomicBool>,
     mouse_capture_enabled: Arc<AtomicBool>,
+    // 将 surface 请求的捕获模式与 Ctrl 按住状态分离，保证只有按住 Ctrl 才物理捕获鼠标。
+    mouse_capture_state: MouseCaptureState,
     // Keeps unmanaged process stderr writes out of the inline viewport.
     _stderr_guard: terminal_stderr::TerminalStderrGuard,
 }
@@ -683,6 +688,7 @@ impl Tui {
             alt_screen_enabled: true,
             alternate_scroll_enabled: Arc::new(AtomicBool::new(true)),
             mouse_capture_enabled: Arc::new(AtomicBool::new(false)),
+            mouse_capture_state: MouseCaptureState::default(),
             _stderr_guard: stderr_guard,
         }
     }
@@ -739,7 +745,7 @@ impl Tui {
 
         // Leave alt screen if active to avoid conflicts with external program `f`.
         let was_alt_screen = self.is_alt_screen_active();
-        let was_mouse_capture_enabled = self.mouse_capture_enabled.load(Ordering::Relaxed);
+        let was_mouse_capture_requested = self.mouse_capture_state.is_requested();
         if was_alt_screen {
             let _ = self.leave_alt_screen();
         }
@@ -770,7 +776,7 @@ impl Tui {
             };
             let _ = self.enter_alt_screen_with_mode(alternate_scroll_mode);
         }
-        if was_mouse_capture_enabled {
+        if was_mouse_capture_requested {
             let _ = self.enable_mouse_capture();
         }
 
@@ -876,8 +882,68 @@ impl Tui {
         }
     }
 
-    /// Capture terminal mouse events for a surface that handles them explicitly.
+    /// Register a surface's mouse-capture request.
+    ///
+    /// The terminal is physically captured only while Ctrl is held. This keeps native terminal
+    /// selection and scrolling available by default while still allowing click-to-position input.
     pub fn enable_mouse_capture(&mut self) -> Result<()> {
+        if self.mouse_capture_state.request_enable() {
+            self.enable_mouse_capture_now()
+        } else {
+            self.disable_mouse_capture_now()
+        }
+    }
+
+    /// Clear a surface's mouse-capture request and restore native terminal mouse handling.
+    pub fn disable_mouse_capture(&mut self) -> Result<()> {
+        self.mouse_capture_state.request_disable();
+        self.disable_mouse_capture_now()
+    }
+
+    /// Handle a standalone Ctrl key so mouse capture is available only while it is held.
+    ///
+    /// The keyboard enhancement protocol reports modifier keys as distinct press/release events.
+    /// Keeping this transition in `Tui` lets ordinary surface changes update their request without
+    /// overriding the physical hold-to-capture behavior.
+    pub(crate) fn handle_control_mouse_capture_event(&mut self, key_event: &KeyEvent) -> bool {
+        let Some(action) = self.mouse_capture_state.handle_control_key(key_event) else {
+            return false;
+        };
+        self.apply_mouse_capture_action(action);
+        true
+    }
+
+    #[cfg(windows)]
+    pub(crate) fn sync_mouse_capture_from_os(&mut self) {
+        use windows_sys::Win32::UI::Input::KeyboardAndMouse::GetAsyncKeyState;
+        use windows_sys::Win32::UI::Input::KeyboardAndMouse::VK_LCONTROL;
+        use windows_sys::Win32::UI::Input::KeyboardAndMouse::VK_RCONTROL;
+
+        let mut control_keys_pressed = 0;
+        if unsafe { GetAsyncKeyState(VK_LCONTROL as i32) } < 0 {
+            control_keys_pressed |= 1;
+        }
+        if unsafe { GetAsyncKeyState(VK_RCONTROL as i32) } < 0 {
+            control_keys_pressed |= 2;
+        }
+        let action = self
+            .mouse_capture_state
+            .sync_control_key_mask(control_keys_pressed);
+        self.apply_mouse_capture_action(action);
+    }
+
+    fn apply_mouse_capture_action(&mut self, action: MouseCaptureAction) {
+        let result = match action {
+            MouseCaptureAction::Ignore => Ok(()),
+            MouseCaptureAction::Disable => self.disable_mouse_capture_now(),
+            MouseCaptureAction::Enable => self.enable_mouse_capture_now(),
+        };
+        if let Err(err) = result {
+            tracing::warn!(error = %err, "failed to update terminal mouse capture for Ctrl selection");
+        }
+    }
+
+    fn enable_mouse_capture_now(&mut self) -> Result<()> {
         if self.mouse_capture_enabled.load(Ordering::Relaxed) {
             return Ok(());
         }
@@ -886,8 +952,7 @@ impl Tui {
         Ok(())
     }
 
-    /// Restore native terminal mouse handling when the active surface closes.
-    pub fn disable_mouse_capture(&mut self) -> Result<()> {
+    fn disable_mouse_capture_now(&mut self) -> Result<()> {
         if !self.mouse_capture_enabled.load(Ordering::Relaxed) {
             return Ok(());
         }
@@ -898,7 +963,8 @@ impl Tui {
 
     /// Leave alternate screen and restore the previously saved inline viewport, if any.
     pub fn leave_alt_screen(&mut self) -> Result<()> {
-        // Mouse capture must never leak into the inline UI or the parent shell.
+        // 离开 alternate screen 时先释放当前 surface 的捕获；返回的 inline surface 如果处理鼠标事件，
+        // 由调用方重新开启，退出 Codex 时则由 restore_after_exit 统一清理。
         let _ = self.disable_mouse_capture();
         if !self.alt_screen_enabled {
             return Ok(());

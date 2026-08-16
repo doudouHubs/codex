@@ -438,6 +438,59 @@ impl TextArea {
         Some((area.x + col, area.y + screen_row))
     }
 
+    /// Map a screen coordinate inside the textarea back to the nearest editable cursor boundary.
+    ///
+    /// The renderer and this reverse mapping intentionally share the same wrapped ranges and
+    /// display-width calculation. That keeps mouse clicks aligned with what the terminal shows
+    /// for wide graphemes, tabs, explicit line breaks, and a scrolled visual line.
+    pub fn cursor_from_position(
+        &self,
+        area: Rect,
+        state: TextAreaState,
+        x: u16,
+        y: u16,
+    ) -> Option<usize> {
+        let relative_x = x.checked_sub(area.x)?;
+        let relative_y = y.checked_sub(area.y)?;
+        if area.width == 0
+            || area.height == 0
+            || relative_x >= area.width
+            || relative_y >= area.height
+        {
+            return None;
+        }
+
+        let lines = self.wrapped_lines(area.width);
+        let Some(last_line_index) = lines.len().checked_sub(1) else {
+            return None;
+        };
+        let effective_scroll = self.effective_scroll(area.height, &lines, state.scroll);
+        let line_index = (effective_scroll as usize + relative_y as usize).min(last_line_index);
+        let line = &lines[line_index];
+        let line_end = line
+            .end
+            .saturating_sub(1)
+            .max(line.start)
+            .min(self.text.len());
+        let target_col = relative_x as usize;
+
+        // 文本编辑器的光标按 grapheme 边界移动，而终端点击只能给出显示列；逐个比较边界
+        // 的显示距离，能避免把中文、emoji 或组合字符拆到 UTF-8 字节中间。
+        let mut best_pos = line.start;
+        let mut best_col = 0usize;
+        let mut current_col = 0usize;
+        for (offset, grapheme) in self.text[line.start..line_end].grapheme_indices(true) {
+            let next_pos = line.start + offset + grapheme.len();
+            current_col += UnicodeWidthStr::width(text_for_display(grapheme).as_ref());
+            if target_col.abs_diff(current_col) <= target_col.abs_diff(best_col) {
+                best_pos = next_pos;
+                best_col = current_col;
+            }
+        }
+
+        Some(self.clamp_pos_to_nearest_boundary(best_pos))
+    }
+
     pub fn is_empty(&self) -> bool {
         self.text.is_empty()
     }
@@ -3639,6 +3692,88 @@ mod tests {
         ratatui::widgets::StatefulWidgetRef::render_ref(&(&t), area, &mut buf, &mut state);
         let (x1, y1) = t.cursor_pos_with_state(area, state).unwrap();
         assert_eq!((x1, y1), (2, 1));
+    }
+
+    #[test]
+    fn cursor_from_position_maps_display_columns_to_grapheme_boundaries() {
+        let t = ta_with("ab你😀");
+        let area = Rect::new(4, 6, 12, 1);
+        let state = TextAreaState::default();
+
+        assert_eq!(t.cursor_from_position(area, state, 4, 6), Some(0));
+        assert_eq!(t.cursor_from_position(area, state, 5, 6), Some(1));
+        assert_eq!(t.cursor_from_position(area, state, 6, 6), Some(2));
+        assert_eq!(
+            t.cursor_from_position(area, state, 7, 6),
+            Some("ab你".len())
+        );
+        assert_eq!(
+            t.cursor_from_position(area, state, 8, 6),
+            Some("ab你".len())
+        );
+        assert_eq!(
+            t.cursor_from_position(area, state, 9, 6),
+            Some(t.text().len())
+        );
+        assert_eq!(
+            t.cursor_from_position(area, state, 15, 6),
+            Some(t.text().len())
+        );
+    }
+
+    #[test]
+    fn cursor_from_position_respects_wrapping_and_scroll() {
+        let mut t = ta_with("abcdefghij");
+        let area = Rect::new(3, 8, 4, 2);
+        let state = TextAreaState { scroll: 1 };
+        t.set_cursor(t.text().len());
+
+        assert_eq!(t.cursor_from_position(area, state, 3, 8), Some(4));
+        assert_eq!(t.cursor_from_position(area, state, 3, 9), Some(8));
+    }
+
+    #[test]
+    fn cursor_from_position_respects_explicit_line_breaks_and_empty_lines() {
+        let t = ta_with("ab\n\ncd");
+        let area = Rect::new(0, 0, 8, 3);
+        let state = TextAreaState::default();
+
+        assert_eq!(t.cursor_from_position(area, state, 0, 0), Some(0));
+        assert_eq!(t.cursor_from_position(area, state, 2, 0), Some(2));
+        assert_eq!(t.cursor_from_position(area, state, 0, 1), Some(3));
+        assert_eq!(t.cursor_from_position(area, state, 0, 2), Some(4));
+    }
+
+    #[test]
+    fn cursor_from_position_snaps_inside_text_elements() {
+        let mut t = TextArea::new();
+        t.insert_str("a");
+        t.insert_element("[image]");
+        t.insert_str("b");
+        let element = t.elements[0].range.clone();
+        let area = Rect::new(0, 0, 20, 1);
+
+        for x in 2..=7 {
+            let cursor = t
+                .cursor_from_position(area, TextAreaState::default(), x, 0)
+                .unwrap();
+            assert!(
+                cursor == element.start || cursor == element.end,
+                "cursor landed inside element at {cursor}: {element:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn cursor_from_position_rejects_coordinates_outside_area() {
+        let t = ta_with("text");
+        let area = Rect::new(2, 3, 4, 1);
+        let state = TextAreaState::default();
+
+        assert_eq!(t.cursor_from_position(area, state, 1, 3), None);
+        assert_eq!(t.cursor_from_position(area, state, 2, 2), None);
+        assert_eq!(t.cursor_from_position(area, state, 6, 3), None);
+        assert_eq!(t.cursor_from_position(area, state, 2, 4), None);
     }
 
     #[test]

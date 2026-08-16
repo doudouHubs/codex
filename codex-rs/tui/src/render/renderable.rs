@@ -11,9 +11,20 @@ use ratatui::widgets::WidgetRef;
 use crate::render::Insets;
 use crate::render::RectExt as _;
 
+pub(crate) fn rect_contains_point(area: Rect, x: u16, y: u16) -> bool {
+    x >= area.x && x < area.right() && y >= area.y && y < area.bottom()
+}
+
 pub trait Renderable {
     fn render(&self, area: Rect, buf: &mut Buffer);
     fn desired_height(&self, width: u16) -> u16;
+    /// 根据屏幕坐标返回实际拥有该点的后代区域。
+    ///
+    /// 布局容器必须按照渲染时相同的布局结果继续命中测试，只有声明可交互目标的叶节点
+    /// 才返回区域。
+    fn hit_test(&self, _area: Rect, _x: u16, _y: u16) -> Option<Rect> {
+        None
+    }
     fn cursor_pos(&self, _area: Rect) -> Option<(u16, u16)> {
         None
     }
@@ -39,6 +50,13 @@ impl<'a> Renderable for RenderableItem<'a> {
         match self {
             RenderableItem::Owned(child) => child.desired_height(width),
             RenderableItem::Borrowed(child) => child.desired_height(width),
+        }
+    }
+
+    fn hit_test(&self, area: Rect, x: u16, y: u16) -> Option<Rect> {
+        match self {
+            RenderableItem::Owned(child) => child.hit_test(area, x, y),
+            RenderableItem::Borrowed(child) => child.hit_test(area, x, y),
         }
     }
 
@@ -139,6 +157,11 @@ impl<R: Renderable> Renderable for Option<R> {
         }
     }
 
+    fn hit_test(&self, area: Rect, x: u16, y: u16) -> Option<Rect> {
+        self.as_ref()
+            .and_then(|renderable| renderable.hit_test(area, x, y))
+    }
+
     fn cursor_pos(&self, area: Rect) -> Option<(u16, u16)> {
         self.as_ref()
             .and_then(|renderable| renderable.cursor_pos(area))
@@ -159,6 +182,11 @@ impl<R: Renderable> Renderable for Arc<R> {
     fn desired_height(&self, width: u16) -> u16 {
         self.as_ref().desired_height(width)
     }
+
+    fn hit_test(&self, area: Rect, x: u16, y: u16) -> Option<Rect> {
+        self.as_ref().hit_test(area, x, y)
+    }
+
     fn cursor_pos(&self, area: Rect) -> Option<(u16, u16)> {
         self.as_ref().cursor_pos(area)
     }
@@ -206,6 +234,27 @@ impl Renderable for ColumnRenderable<'_> {
                 return Some((px, py));
             }
             y += child_area.height;
+        }
+        None
+    }
+
+    fn hit_test(&self, area: Rect, x: u16, y: u16) -> Option<Rect> {
+        let mut child_y = area.y;
+        for child in &self.children {
+            let child_area = Rect::new(
+                area.x,
+                child_y,
+                area.width,
+                child.desired_height(area.width),
+            )
+            .intersection(area);
+            if !child_area.is_empty()
+                && rect_contains_point(child_area, x, y)
+                && let Some(hit_area) = child.hit_test(child_area, x, y)
+            {
+                return Some(hit_area);
+            }
+            child_y += child_area.height;
         }
         None
     }
@@ -362,6 +411,17 @@ impl<'a> Renderable for FlexRenderable<'a> {
             .find_map(|(rect, child)| child.child.cursor_pos(rect))
     }
 
+    fn hit_test(&self, area: Rect, x: u16, y: u16) -> Option<Rect> {
+        self.allocate(area)
+            .into_iter()
+            .zip(self.children.iter())
+            .find_map(|(rect, child)| {
+                rect_contains_point(rect, x, y)
+                    .then(|| child.child.hit_test(rect, x, y))
+                    .flatten()
+            })
+    }
+
     fn cursor_style(&self, area: Rect) -> SetCursorStyle {
         self.allocate(area)
             .into_iter()
@@ -425,6 +485,22 @@ impl Renderable for RowRenderable<'_> {
         None
     }
 
+    fn hit_test(&self, area: Rect, x: u16, y: u16) -> Option<Rect> {
+        let mut child_x = area.x;
+        for (width, child) in &self.children {
+            let available_width = area.width.saturating_sub(child_x - area.x);
+            let child_area = Rect::new(child_x, area.y, (*width).min(available_width), area.height);
+            if !child_area.is_empty()
+                && rect_contains_point(child_area, x, y)
+                && let Some(hit_area) = child.hit_test(child_area, x, y)
+            {
+                return Some(hit_area);
+            }
+            child_x = child_x.saturating_add(*width);
+        }
+        None
+    }
+
     fn cursor_style(&self, area: Rect) -> SetCursorStyle {
         let mut x = area.x;
         for (width, child) in &self.children {
@@ -467,6 +543,10 @@ impl<'a> Renderable for InsetRenderable<'a> {
     }
     fn cursor_pos(&self, area: Rect) -> Option<(u16, u16)> {
         self.child.cursor_pos(area.inset(self.insets))
+    }
+
+    fn hit_test(&self, area: Rect, x: u16, y: u16) -> Option<Rect> {
+        self.child.hit_test(area.inset(self.insets), x, y)
     }
 
     fn cursor_style(&self, area: Rect) -> SetCursorStyle {
