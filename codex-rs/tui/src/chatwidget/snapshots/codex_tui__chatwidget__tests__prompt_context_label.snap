@@ -1,10 +1,10 @@
 ---
 source: tui/src/chatwidget/tests/side.rs
-assertion_line: 458
+assertion_line: 466
 expression: terminal.backend()
 ---
 "                                                                                "
 "                                                                                "
 " › Check recently modified functions for compatibility                          "
 "                                                                                "
-"  gpt-5.6-sol default · C:\tmp\project   Prompt from main thread · Prompt mode  "
+"  gpt-5.6-sol                       Prompt from main thread · Ctrl+C to return  "

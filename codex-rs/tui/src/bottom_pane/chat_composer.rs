@@ -3453,19 +3453,15 @@ impl ChatComposer {
     }
 
     fn prompt_mode_footer_line(&self) -> Option<Line<'static>> {
-        if self.prompt_mode == ComposerPromptMode::Inactive {
-            return None;
+        match self.prompt_mode {
+            ComposerPromptMode::Inactive => None,
+            // Hash 阶段还没有 Prompt 子线程，继续显示明确的模式提示。
+            ComposerPromptMode::Hash => {
+                Some(Line::from(vec![Span::from("Prompt mode").light_red()]))
+            }
+            // Prompt 子线程已经把上下文标签交给 side 的通用右侧布局；这里不再抢占同一行。
+            ComposerPromptMode::Thread => None,
         }
-
-        // Prompt 子线程同时需要显示上下文名和模式名；模式名放在最右侧，保持和 Shell
-        // mode 一样的视觉定位，同时避免上下文标签把模式状态遮掉。
-        let mut spans = Vec::with_capacity(3);
-        if let Some(label) = self.footer.side_conversation_context_label.as_ref() {
-            spans.push(Span::from(label.clone()).magenta());
-            spans.push(Span::from(" · ").dim());
-        }
-        spans.push(Span::from("Prompt mode").light_red());
-        Some(Line::from(spans))
     }
 
     /// Applies any due `PasteBurst` flush at time `now`.
@@ -3768,7 +3764,14 @@ impl ChatComposer {
                 reasoning_down: self.footer.reasoning_down_key,
                 reasoning_up: self.footer.reasoning_up_key,
             },
-            active_agent_label: self.footer.active_agent_label.clone(),
+            // Prompt 子线程的右侧上下文已经独占 footer；继续传递全局 agent 标签会把
+            // “Prompt from main thread” 渲染两次。Hash 入口尚未进入子线程，仍保留原标签。
+            active_agent_label: match self.prompt_mode {
+                ComposerPromptMode::Thread => None,
+                ComposerPromptMode::Inactive | ComposerPromptMode::Hash => {
+                    self.footer.active_agent_label.clone()
+                }
+            },
         }
     }
 

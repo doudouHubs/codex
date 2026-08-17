@@ -17,6 +17,7 @@ impl ChatWidget {
     }
 
     pub(crate) fn set_side_conversation_active(&mut self, active: bool) {
+        let state_changed = self.active_side_conversation != active;
         self.active_side_conversation = active;
         let placeholder = if active {
             self.side_placeholder_text.clone()
@@ -28,6 +29,11 @@ impl ChatWidget {
         // Prompt and side are mutually exclusive surfaces. The App layer re-enables Prompt after
         // returning to main, while side activation closes the entry mode immediately.
         self.bottom_pane.set_prompt_mode_available(!active);
+        if state_changed {
+            // thread-title 已经在子线程 footer 的上下文标签中表达；状态栏缓存必须在壳切换
+            // 后立即重算，否则新 ChatWidget 初始化时生成的旧值会继续显示一帧甚至更久。
+            self.refresh_status_line();
+        }
     }
 
     pub(crate) fn side_conversation_active(&self) -> bool {

@@ -736,17 +736,15 @@ impl ChatWidget {
                 },
             ),
             StatusLineItem::RawOutput => self.raw_output_mode().then(|| "raw output".to_string()),
-            StatusLineItem::ThreadTitle => self.thread_name.as_ref().map_or_else(
-                || self.thread_id.map(|id| id.to_string()),
-                |name| {
-                    let trimmed = name.trim();
-                    if trimmed.is_empty() {
-                        self.thread_id.map(|id| id.to_string())
-                    } else {
-                        Some(trimmed.to_string())
-                    }
-                },
-            ),
+            StatusLineItem::ThreadTitle => {
+                // Side/Prompt 已经用右侧上下文行表达当前子线程；继续渲染 thread-title 会把
+                // Prompt 的合成名称再显示一次。终端标题仍通过独立路径保留线程标题。
+                if self.active_side_conversation {
+                    None
+                } else {
+                    self.thread_title_value()
+                }
+            }
             StatusLineItem::WorkspaceHeadline => self.status_line_workspace_headline.clone(),
             StatusLineItem::TaskProgress => self.terminal_title_task_progress(),
         }
@@ -757,6 +755,20 @@ impl ChatWidget {
             .as_ref()
             .and_then(|summary| summary.pull_request.as_ref())
             .map(|pull_request| pull_request.url.clone())
+    }
+
+    fn thread_title_value(&self) -> Option<String> {
+        self.thread_name.as_ref().map_or_else(
+            || self.thread_id.map(|id| id.to_string()),
+            |name| {
+                let trimmed = name.trim();
+                if trimmed.is_empty() {
+                    self.thread_id.map(|id| id.to_string())
+                } else {
+                    Some(trimmed.to_string())
+                }
+            },
+        )
     }
 
     pub(super) fn status_surface_preview_value_for_item(
@@ -814,7 +826,7 @@ impl ChatWidget {
             TerminalTitleItem::Spinner => self.terminal_title_spinner_text_at(now),
             TerminalTitleItem::Status => Some(self.run_state_status_text()),
             TerminalTitleItem::Thread => self
-                .status_line_value_for_item(StatusLineItem::ThreadTitle)
+                .thread_title_value()
                 .map(|value| Self::truncate_terminal_title_part(value, /*max_chars*/ 48)),
             TerminalTitleItem::GitBranch => self.status_line_branch.as_ref().map(|branch| {
                 Self::truncate_terminal_title_part(branch.clone(), /*max_chars*/ 32)

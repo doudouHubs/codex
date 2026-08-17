@@ -239,7 +239,9 @@ impl App {
                 .set_side_conversation_active(/*active*/ true);
             self.chat_widget.set_prompt_mode_available(false);
             self.chat_widget
-                .set_side_conversation_context_label(Some(PROMPT_CONTEXT_LABEL.to_string()));
+                .set_side_conversation_context_label(Some(format!(
+                    "{PROMPT_CONTEXT_LABEL} · Ctrl+C to return"
+                )));
             self.chat_widget.set_prompt_mode(ComposerPromptMode::Thread);
             self.chat_widget
                 .set_prompt_optimization_mode(optimization_mode);

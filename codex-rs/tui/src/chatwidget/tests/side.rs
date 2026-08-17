@@ -446,9 +446,15 @@ async fn side_context_label_shows_parent_status_snapshot() {
 async fn prompt_context_label_snapshot() {
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
     chat.show_welcome_banner = false;
+    chat.config.tui_status_line = Some(vec!["model-name".to_string(), "thread-title".to_string()]);
+    chat.thread_name = Some("Prompt from main thread".to_string());
     chat.set_side_conversation_active(/*active*/ true);
     chat.set_prompt_mode(ComposerPromptMode::Thread);
-    chat.set_side_conversation_context_label(Some("Prompt from main thread".to_string()));
+    // 同时设置全局 agent 标签，覆盖 App 在多线程 footer 中的真实状态，确保 Prompt 不重复展示。
+    chat.set_active_agent_label(Some("Prompt from main thread".to_string()));
+    chat.set_side_conversation_context_label(Some(
+        "Prompt from main thread · Ctrl+C to return".to_string(),
+    ));
 
     let width = 80;
     let height = chat.desired_height(width);
