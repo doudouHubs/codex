@@ -1,0 +1,12 @@
+---
+source: tui/src/chatwidget/tests/status_and_layout.rs
+assertion_line: 2035
+expression: snapshot
+---
+"                                                                                "
+"• Working (0s • esc to interrupt)                                               "
+"                                                                                "
+"                                                                                "
+" › Ask Codex to do anything                                                     "
+"                                                                                "
+"  gpt-5.6-sol default · /tmp/project              Goal paused (/goal resume)    "
