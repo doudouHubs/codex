@@ -6,7 +6,6 @@ use super::app_server_event_targets::server_notification_thread_target;
 use super::app_server_event_targets::server_request_thread_id;
 use crate::app_command::AppCommand;
 use crate::app_event::AppEvent;
-use crate::app_event::ConnectorsSnapshot;
 use crate::app_info::app_info_from_api;
 use crate::app_server_session::AppServerSession;
 use crate::app_server_session::status_account_display_from_auth_mode;
@@ -18,6 +17,22 @@ use codex_app_server_protocol::ServerRequest;
 
 impl App {
     pub(super) fn refresh_mcp_startup_expected_servers_from_config(&mut self) {
+        if self
+            .current_displayed_thread_id()
+            .zip(self.primary_thread_id)
+            .is_some_and(|(thread_id, primary_thread_id)| {
+                self.agent_navigation.is_parent_owned(thread_id)
+                    || (thread_id != primary_thread_id
+                        && !self.side_threads.contains_key(&thread_id))
+            })
+        {
+            // Subagents can defer cached servers indefinitely, so only servers
+            // that actually report startup should keep their status running.
+            self.chat_widget
+                .set_mcp_startup_expected_servers(std::iter::empty());
+            return;
+        }
+
         let enabled_config_mcp_servers: Vec<String> = self
             .config
             .mcp_servers
@@ -44,11 +59,11 @@ impl App {
                 self.chat_widget.finish_mcp_startup_after_lag();
             }
             AppServerEvent::ServerNotification(notification) => {
-                self.handle_server_notification_event(app_server_client, notification)
+                self.handle_server_notification_event(app_server_client, *notification)
                     .await;
             }
             AppServerEvent::ServerRequest(request) => {
-                self.handle_server_request_event(app_server_client, request)
+                self.handle_server_request_event(app_server_client, *request)
                     .await;
             }
             AppServerEvent::Disconnected { message } => {
@@ -71,6 +86,10 @@ impl App {
                     .resolve_notification(&notification.request_id)
                 {
                     self.chat_widget.dismiss_app_server_request(&request);
+                    if self.startup_pending_protected_request {
+                        self.startup_pending_protected_request =
+                            self.chat_widget.has_pending_protected_request();
+                    }
                 }
             }
             ServerNotification::McpServerStatusUpdated(_) => {
@@ -95,6 +114,10 @@ impl App {
                 return;
             }
             ServerNotification::AccountUpdated(notification) => {
+                // Deferred terminal writes must never carry the previous account's billing into
+                // the newly authenticated identity, even when both accounts share one thread.
+                self.last_thread_usage_status_cell = None;
+                self.pending_thread_usage_history_refresh = false;
                 let has_codex_backend_auth = matches!(
                     notification.auth_mode,
                     Some(
@@ -132,23 +155,23 @@ impl App {
                 self.fetch_plugins_list(app_server_client, cwd);
                 if should_report_completion {
                     self.chat_widget.add_plain_history_lines(
-                        crate::external_agent_config_migration_flow::external_agent_config_migration_finished_lines(notification),
+                        crate::external_agent_config_migration::flow::external_agent_config_migration_finished_lines(notification),
                     );
                 }
                 return;
             }
             ServerNotification::AppListUpdated(notification) => {
-                self.chat_widget.on_connectors_loaded(
-                    Ok(ConnectorsSnapshot {
-                        connectors: notification
-                            .data
-                            .iter()
-                            .cloned()
-                            .map(app_info_from_api)
-                            .collect(),
-                    }),
-                    /*is_final*/ false,
-                );
+                if self.current_displayed_thread_id().is_some() {
+                    self.chat_widget
+                        .refresh_connector_directory_after_notification(
+                            notification
+                                .data
+                                .iter()
+                                .cloned()
+                                .map(app_info_from_api)
+                                .collect(),
+                        );
+                }
                 return;
             }
             _ => {}
@@ -195,6 +218,21 @@ impl App {
         app_server_client: &AppServerSession,
         request: ServerRequest,
     ) {
+        let thread_id = server_request_thread_id(&request);
+        if thread_id.is_some_and(|thread_id| self.abandoned_side_threads.contains(&thread_id)) {
+            if let Err(err) = self
+                .reject_app_server_request(
+                    app_server_client,
+                    request.id().clone(),
+                    "side conversation was closed".to_string(),
+                )
+                .await
+            {
+                tracing::warn!("{err}");
+            }
+            return;
+        }
+
         if let Some(unsupported) = self
             .pending_app_server_requests
             .note_server_request(&request)
@@ -219,7 +257,7 @@ impl App {
             return;
         }
 
-        let Some(thread_id) = server_request_thread_id(&request) else {
+        let Some(thread_id) = thread_id else {
             tracing::warn!("ignoring threadless app-server request");
             return;
         };

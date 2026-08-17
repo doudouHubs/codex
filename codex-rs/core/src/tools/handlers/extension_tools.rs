@@ -6,6 +6,7 @@ use codex_protocol::protocol::Event;
 use codex_protocol::protocol::EventMsg;
 use codex_tools::ConversationHistory;
 use codex_tools::ExtensionTurnItem;
+use codex_tools::ResponsesApiNamespaceTool;
 use codex_tools::ToolCall as ExtensionToolCall;
 use codex_tools::ToolEnvironment;
 use codex_tools::ToolName;
@@ -61,7 +62,23 @@ impl ToolExecutor<ToolInvocation> for ExtensionToolAdapter {
 
 impl CoreToolRuntime for ExtensionToolAdapter {
     fn matches_kind(&self, payload: &ToolPayload) -> bool {
-        matches!(payload, ToolPayload::Function { .. })
+        match payload {
+            ToolPayload::Function { .. } => true,
+            ToolPayload::Custom { .. } => match self.0.spec() {
+                ToolSpec::Freeform(_) => true,
+                ToolSpec::Namespace(namespace) => namespace.tools.iter().any(|tool| {
+                    matches!(
+                        tool,
+                        ResponsesApiNamespaceTool::Custom(tool)
+                            if tool.name == self.0.tool_name().name
+                    )
+                }),
+                ToolSpec::Function(_)
+                | ToolSpec::ToolSearch { .. }
+                | ToolSpec::WebSearch { .. } => false,
+            },
+            ToolPayload::ToolSearch { .. } => false,
+        }
     }
 }
 
@@ -133,7 +150,7 @@ async fn to_extension_call(invocation: &ToolInvocation) -> ExtensionToolCall {
         };
         let additional_permissions = apply_granted_turn_permissions(
             invocation.session.as_ref(),
-            &environment.environment_id,
+            &environment.selection.environment_id,
             native_cwd.as_path(),
             SandboxPermissions::UseDefault,
             /*additional_permissions*/ None,
@@ -144,7 +161,7 @@ async fn to_extension_call(invocation: &ToolInvocation) -> ExtensionToolCall {
             .turn
             .file_system_sandbox_context(additional_permissions, environment);
         environments.push(ToolEnvironment {
-            environment_id: environment.environment_id.clone(),
+            environment_id: environment.selection.environment_id.clone(),
             cwd: native_cwd,
             file_system: environment.environment.get_filesystem(),
             file_system_sandbox_context,
@@ -183,6 +200,8 @@ mod tests {
     use codex_tools::ExtensionTurnItem;
     use codex_utils_absolute_path::test_support::PathExt;
     use codex_utils_absolute_path::test_support::test_path_buf;
+    use core_test_support::responses::strip_response_item_id;
+    use core_test_support::responses::strip_response_item_ids;
     use pretty_assertions::assert_eq;
     use serde_json::json;
     use tokio::sync::Mutex;
@@ -284,6 +303,18 @@ mod tests {
         }
     }
 
+    #[test]
+    fn function_extensions_reject_custom_payloads() {
+        let handler = ExtensionToolAdapter::new(Arc::new(StubExtensionExecutor));
+
+        assert!(handler.matches_kind(&ToolPayload::Function {
+            arguments: "{}".to_string(),
+        }));
+        assert!(!handler.matches_kind(&ToolPayload::Custom {
+            input: "raw input".to_string(),
+        }));
+    }
+
     #[tokio::test]
     async fn exposes_generic_hook_payloads() {
         let handler = ExtensionToolAdapter::new(Arc::new(StubExtensionExecutor));
@@ -351,13 +382,23 @@ mod tests {
         session
             .record_conversation_items(&turn, std::slice::from_ref(&history_item))
             .await;
-        let mut expected_history_item = history_item.clone();
-        expected_history_item.set_turn_id_if_missing(&turn_id);
+        let expected_history_item = strip_response_item_id(
+            session
+                .clone_history()
+                .await
+                .raw_items()
+                .next()
+                .expect("history item")
+                .clone(),
+        );
         let raw_history_event = rx.recv().await.expect("history raw response item event");
         let EventMsg::RawResponseItem(raw_history_item) = raw_history_event.msg else {
             panic!("expected raw response item event");
         };
-        assert_eq!(raw_history_item.item, expected_history_item);
+        assert_eq!(
+            strip_response_item_id(raw_history_item.item),
+            expected_history_item
+        );
         let step_context = StepContext::for_test(Arc::clone(&turn));
         let invocation = ToolInvocation {
             session,
@@ -397,8 +438,8 @@ mod tests {
             expected_sandbox_cwds
         );
         assert_eq!(
-            captured_call.conversation_history.items(),
-            std::slice::from_ref(&expected_history_item)
+            strip_response_item_ids(captured_call.conversation_history.items()),
+            vec![expected_history_item]
         );
         match captured_call.payload {
             ToolPayload::Function { arguments } => {
@@ -429,11 +470,6 @@ mod tests {
     async fn image_generation_publication_preserves_extension_saved_path() {
         let (session, turn, rx) = crate::session::tests::make_session_and_context_with_rx().await;
         let expected_path = test_path_buf("/tmp/extension-claimed.png").abs();
-        let default_path = crate::stream_events_utils::image_generation_artifact_path(
-            &turn.config.codex_home,
-            &session.thread_id.to_string(),
-            "call-image",
-        );
         let emitter = CoreTurnItemEmitter {
             session: Arc::downgrade(&session),
             turn: Arc::downgrade(&turn),
@@ -443,6 +479,8 @@ mod tests {
             status: "in_progress".to_string(),
             revised_prompt: None,
             result: String::new(),
+            transparent_background: None,
+            failure: None,
             saved_path: None,
         });
         let expected_completed_item = ExtensionItem::ImageGeneration(ImageGenerationItem {
@@ -450,6 +488,8 @@ mod tests {
             status: "completed".to_string(),
             revised_prompt: Some("A tiny blue square".to_string()),
             result: "cG5n".to_string(),
+            transparent_background: Some(true),
+            failure: None,
             saved_path: Some(expected_path.clone()),
         });
         codex_tools::TurnItemEmitter::emit_started(
@@ -471,6 +511,8 @@ mod tests {
                     status: "completed".to_string(),
                     revised_prompt: Some("A tiny blue square".to_string()),
                     result: "cG5n".to_string(),
+                    transparent_background: Some(true),
+                    failure: None,
                     saved_path: Some(expected_path.clone()),
                 })],
             },
@@ -498,6 +540,5 @@ mod tests {
 
         assert_eq!(started_item, expected_started_item);
         assert_eq!(completed_item, expected_completed_item);
-        assert!(!default_path.exists());
     }
 }

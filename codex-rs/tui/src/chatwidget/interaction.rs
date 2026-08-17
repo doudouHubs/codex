@@ -54,6 +54,10 @@ impl ChatWidget {
         }
     }
 
+    pub(crate) fn keymap_contexts(&self) -> crate::keymap::KeymapContextSet {
+        self.bottom_pane.keymap_contexts()
+    }
+
     pub(crate) fn handle_key_event(&mut self, key_event: KeyEvent) {
         if self.bottom_pane.has_active_view()
             && !matches!(
@@ -71,6 +75,7 @@ impl ChatWidget {
             let should_pause_active_goal = self
                 .bottom_pane
                 .active_view_will_interrupt_turn_on_key_event(key_event);
+            self.flush_completed_command_activity();
             self.bottom_pane.handle_key_event(key_event);
             if should_pause_active_goal {
                 self.pause_active_goal_for_interrupt();
@@ -157,7 +162,18 @@ impl ChatWidget {
         }
 
         if key_event.kind == KeyEventKind::Press
-            && self.chat_keymap.edit_queued_message.is_pressed(key_event)
+            && (self.chat_keymap.edit_queued_message.is_pressed(key_event)
+                || (self.bottom_pane.composer_is_empty()
+                    && self
+                        .bottom_pane
+                        .keymap_contexts()
+                        .contains(crate::keymap::KeymapContext::VimNormal)
+                    && self
+                        .bottom_pane
+                        .runtime_keymap()
+                        .vim_normal
+                        .move_up
+                        .is_pressed(key_event)))
             && self.has_queued_follow_up_messages()
             && self.bottom_pane.no_modal_or_popup_active()
         {
@@ -219,13 +235,20 @@ impl ChatWidget {
                 && !self.bottom_pane.is_task_running()
                 && self.bottom_pane.no_modal_or_popup_active() =>
             {
-                self.cycle_collaboration_mode();
-                self.refresh_plan_mode_nudge();
+                if self.blocks_direct_input {
+                    self.add_error_message(PARENT_OWNED_INPUT_MESSAGE.to_string());
+                } else {
+                    self.cycle_collaboration_mode();
+                    self.refresh_plan_mode_nudge();
+                }
             }
             _ => {
                 let had_modal_or_popup = !self.bottom_pane.no_modal_or_popup_active();
                 let should_pause_active_goal =
                     self.bottom_pane.should_interrupt_running_task(key_event);
+                if key_event.code == KeyCode::Enter {
+                    self.flush_completed_command_activity();
+                }
                 let input_result = self.bottom_pane.handle_key_event(key_event);
                 if should_pause_active_goal {
                     self.pause_active_goal_for_interrupt();
@@ -330,6 +353,24 @@ impl ChatWidget {
         self.bottom_pane.show_selection_view(params);
         self.refresh_plan_mode_nudge();
         self.request_redraw();
+    }
+
+    pub(crate) fn selected_index_for_present_view(&self, view_id: &'static str) -> Option<usize> {
+        self.bottom_pane.selected_index_for_present_view(view_id)
+    }
+
+    pub(crate) fn replace_selection_view_if_present(
+        &mut self,
+        view_id: &'static str,
+        params: SelectionViewParams,
+    ) -> bool {
+        let replaced = self
+            .bottom_pane
+            .replace_selection_view_if_present(view_id, params);
+        if replaced {
+            self.refresh_plan_mode_nudge();
+        }
+        replaced
     }
 
     pub(crate) fn no_modal_or_popup_active(&self) -> bool {
@@ -598,15 +639,20 @@ impl ChatWidget {
         self.bottom_pane.is_task_running() || self.review.is_review_mode
     }
 
-    fn pause_active_goal_for_interrupt(&self) {
-        if !self.turn_lifecycle.agent_turn_running {
-            return;
-        }
-        if !self
-            .current_goal_status
-            .as_ref()
-            .is_some_and(GoalStatusState::is_active)
-        {
+    pub(crate) fn is_agent_turn_running(&self) -> bool {
+        self.turn_lifecycle.agent_turn_running
+    }
+
+    pub(crate) fn is_active_goal_turn_running(&self) -> bool {
+        self.turn_lifecycle.agent_turn_running
+            && self
+                .current_goal_status
+                .as_ref()
+                .is_some_and(GoalStatusState::is_active)
+    }
+
+    pub(crate) fn pause_active_goal_for_interrupt(&self) {
+        if !self.is_active_goal_turn_running() {
             return;
         }
         let Some(thread_id) = self.thread_id else {

@@ -342,9 +342,23 @@ async fn invalid_url_elicitation_is_declined() {
 #[tokio::test]
 async fn thread_settings_updated_updates_visible_state_without_transcript() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(Some("gpt-5.2")).await;
+    set_chatgpt_auth(&mut chat);
     set_fast_mode_test_catalog(&mut chat);
     let thread_id = ThreadId::new();
-    chat.handle_thread_session(configured_thread_session(thread_id));
+    let mut session = configured_thread_session(thread_id);
+    session.cwd = test_path_buf("/tmp/original-workspace").abs();
+    chat.handle_thread_session(session);
+    let generation = chat.connector_scope_generation();
+    chat.on_connectors_loaded(
+        Ok(crate::app_event::ConnectorsSnapshot {
+            connectors: vec![
+                serde_json::from_str(r#"{"id":"old","name":"Old","isAccessible":true}"#)
+                    .expect("valid app"),
+            ],
+        }),
+        /*is_final*/ true,
+    );
+    chat.prefetch_connectors();
     let _ = drain_insert_history(&mut rx);
 
     chat.handle_server_notification(
@@ -352,6 +366,9 @@ async fn thread_settings_updated_updates_visible_state_without_transcript() {
         /*replay_kind*/ None,
     );
 
+    assert_ne!(chat.connector_scope_generation(), generation);
+    assert!(chat.connectors_for_mentions().is_none());
+    assert!(chat.connectors.prefetch_in_flight);
     assert_eq!(chat.current_model(), "gpt-5.4");
     assert_eq!(
         chat.current_reasoning_effort(),
@@ -539,6 +556,43 @@ async fn live_app_server_user_message_item_completed_does_not_duplicate_rendered
 }
 
 #[tokio::test]
+async fn live_app_server_user_message_omits_unsupported_media() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+
+    chat.handle_server_notification(
+        ServerNotification::ItemCompleted(ItemCompletedNotification {
+            thread_id: "thread-1".to_string(),
+            turn_id: "turn-1".to_string(),
+            completed_at_ms: 0,
+            item: AppServerThreadItem::UserMessage {
+                id: "user-1".to_string(),
+                client_id: None,
+                content: vec![
+                    AppServerUserInput::Text {
+                        text: "Please inspect the attachments.".to_string(),
+                        text_elements: Vec::new(),
+                    },
+                    AppServerUserInput::Audio {
+                        url: "https://example.com/one.wav".to_string(),
+                    },
+                    AppServerUserInput::LocalAudio {
+                        path: test_path_buf("/tmp/two.wav"),
+                    },
+                ],
+            },
+        }),
+        /*replay_kind*/ None,
+    );
+
+    let inserted = drain_insert_history(&mut rx);
+    assert_eq!(inserted.len(), 1);
+    assert_chatwidget_snapshot!(
+        "live_app_server_user_message_omits_unsupported_media",
+        lines_to_single_string(&inserted[0]),
+    );
+}
+
+#[tokio::test]
 async fn live_app_server_turn_completed_clears_working_status_after_answer_item() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
 
@@ -566,17 +620,18 @@ async fn live_app_server_turn_completed_clears_working_status_after_answer_item(
         .expect("status indicator should be visible");
     assert_eq!(status.header(), "Working");
 
+    let item = AppServerThreadItem::AgentMessage {
+        id: "msg-1".to_string(),
+        text: "Yes. What do you need?".to_string(),
+        phase: Some(MessagePhase::FinalAnswer),
+        memory_citation: None,
+    };
     chat.handle_server_notification(
         ServerNotification::ItemCompleted(ItemCompletedNotification {
             thread_id: "thread-1".to_string(),
             turn_id: "turn-1".to_string(),
             completed_at_ms: 0,
-            item: AppServerThreadItem::AgentMessage {
-                id: "msg-1".to_string(),
-                text: "Yes. What do you need?".to_string(),
-                phase: Some(MessagePhase::FinalAnswer),
-                memory_citation: None,
-            },
+            item: item.clone(),
         }),
         /*replay_kind*/ None,
     );
@@ -591,8 +646,8 @@ async fn live_app_server_turn_completed_clears_working_status_after_answer_item(
             thread_id: "thread-1".to_string(),
             turn: AppServerTurn {
                 id: "turn-1".to_string(),
-                items_view: codex_app_server_protocol::TurnItemsView::Full,
-                items: Vec::new(),
+                items_view: codex_app_server_protocol::TurnItemsView::Summary,
+                items: vec![item],
                 status: AppServerTurnStatus::Completed,
                 error: None,
                 started_at: None,
@@ -603,8 +658,13 @@ async fn live_app_server_turn_completed_clears_working_status_after_answer_item(
         /*replay_kind*/ None,
     );
 
+    assert!(drain_insert_history(&mut rx).is_empty());
     assert!(!chat.bottom_pane.is_task_running());
     assert!(chat.bottom_pane.status_widget().is_none());
+    assert_eq!(
+        chat.transcript.last_completed_agent_message,
+        Some(("turn-1".to_string(), "msg-1".to_string()))
+    );
 }
 
 #[tokio::test]
@@ -765,6 +825,8 @@ async fn live_app_server_command_execution_strips_shell_wrapper() {
                 command: command.clone(),
                 cwd: test_path_buf("/tmp").abs().into(),
                 process_id: None,
+                plugin_id: None,
+                script_path: None,
                 source: AppServerCommandExecutionSource::UserShell,
                 status: AppServerCommandExecutionStatus::InProgress,
                 command_actions: vec![AppServerCommandAction::Unknown {
@@ -787,6 +849,8 @@ async fn live_app_server_command_execution_strips_shell_wrapper() {
                 command,
                 cwd: test_path_buf("/tmp").abs().into(),
                 process_id: None,
+                plugin_id: None,
+                script_path: None,
                 source: AppServerCommandExecutionSource::UserShell,
                 status: AppServerCommandExecutionStatus::Completed,
                 command_actions: vec![AppServerCommandAction::Unknown {
@@ -810,6 +874,57 @@ async fn live_app_server_command_execution_strips_shell_wrapper() {
     assert_chatwidget_snapshot!(
         "live_app_server_command_execution_strips_shell_wrapper",
         blob
+    );
+}
+
+#[tokio::test]
+async fn live_app_server_command_output_delta_transcript_snapshot() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    chat.on_task_started();
+    begin_exec(&mut chat, "cmd-1", "printf 'stdout\\nstderr\\n'");
+
+    for delta in ["stdout\n", "stderr\n"] {
+        chat.handle_server_notification(
+            ServerNotification::CommandExecutionOutputDelta(
+                codex_app_server_protocol::CommandExecutionOutputDeltaNotification {
+                    thread_id: "thread-1".to_string(),
+                    turn_id: "turn-1".to_string(),
+                    item_id: "cmd-1".to_string(),
+                    delta: delta.to_string(),
+                },
+            ),
+            /*replay_kind*/ None,
+        );
+    }
+
+    let active = active_blob(&chat);
+    assert_chatwidget_snapshot!("live_app_server_command_output_delta_active", active);
+
+    let transcript = chat
+        .active_cell_transcript_lines(/*width*/ 80)
+        .expect("active exec transcript lines");
+    assert_chatwidget_snapshot!(
+        "live_app_server_command_output_delta_transcript",
+        lines_to_single_string(&transcript)
+    );
+
+    handle_turn_interrupted(&mut chat, "turn-1");
+    let mut completed = None;
+    while let Ok(event) = rx.try_recv() {
+        if let AppEvent::InsertHistoryCell(cell) = event {
+            let transcript = lines_to_single_string(&cell.transcript_lines(/*width*/ 80));
+            if transcript.contains("printf 'stdout\\nstderr\\n'") {
+                completed = Some(transcript);
+            }
+        }
+    }
+    let completed = completed.expect("expected the interrupted command in history");
+    let completed = regex_lite::Regex::new(r"(?m) • (?:\d+ms|\d+\.\d+s|\d+m \d+s)$")
+        .expect("valid duration regex")
+        .replace(&completed, " • <duration>");
+    assert_chatwidget_snapshot!(
+        "live_app_server_command_output_delta_interrupted",
+        completed
     );
 }
 
@@ -1001,7 +1116,6 @@ async fn live_app_server_failed_turn_does_not_duplicate_error_history() {
         }),
         /*replay_kind*/ None,
     );
-
     let first_cells = drain_insert_history(&mut rx);
     assert_eq!(first_cells.len(), 1);
     assert!(lines_to_single_string(&first_cells[0]).contains("permission denied"));
@@ -1063,6 +1177,64 @@ async fn live_app_server_failed_turn_consolidates_streamed_answer() {
         saw_consolidate,
         "failed turn should consolidate streamed cells before clearing the stream controller"
     );
+}
+
+#[tokio::test]
+async fn live_app_server_turn_completion_repairs_dropped_message_deltas() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+
+    handle_turn_started(&mut chat, "turn-1");
+    while rx.try_recv().is_ok() {}
+    handle_agent_message_delta(&mut chat, "The transport kept this.\n");
+    chat.run_commit_tick();
+    while rx.try_recv().is_ok() {}
+
+    let mut completed_turn = app_server_turn(
+        "turn-1",
+        AppServerTurnStatus::Completed,
+        Some(1_000),
+        /*error*/ None,
+    );
+    completed_turn.items_view = codex_app_server_protocol::TurnItemsView::Summary;
+    completed_turn.items = vec![AppServerThreadItem::AgentMessage {
+        id: "msg-1".to_string(),
+        text: concat!(
+            "The transport kept this.\nAnd dropped this.\n\n",
+            r#"::code-comment{title="Finding" body="Keep ::git-stage{cwd=/tmp} literal." file="/tmp/file.rs"}"#,
+        )
+        .to_string(),
+        phase: Some(MessagePhase::FinalAnswer),
+        memory_citation: None,
+    }];
+    chat.handle_server_notification(
+        ServerNotification::TurnCompleted(TurnCompletedNotification {
+            thread_id: "thread-1".to_string(),
+            turn: completed_turn,
+        }),
+        /*replay_kind*/ None,
+    );
+
+    let consolidations = std::iter::from_fn(|| rx.try_recv().ok())
+        .filter_map(|event| match event {
+            AppEvent::ConsolidateAgentMessage {
+                source,
+                scrollback_reflow,
+                ..
+            } => {
+                assert_eq!(
+                    scrollback_reflow,
+                    crate::app_event::ConsolidationScrollbackReflow::Required
+                );
+                assert_chatwidget_snapshot!(
+                    "live_app_server_turn_completion_repairs_dropped_message_deltas",
+                    source,
+                );
+                Some(())
+            }
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(consolidations.len(), 1);
 }
 
 #[tokio::test]

@@ -34,6 +34,9 @@ impl ChatWidget {
             // 后立即重算，否则新 ChatWidget 初始化时生成的旧值会继续显示一帧甚至更久。
             self.refresh_status_line();
         }
+        if self.blocks_direct_input && !active {
+            self.bottom_pane.set_parent_owned_thread();
+        }
     }
 
     pub(crate) fn side_conversation_active(&self) -> bool {

@@ -236,6 +236,10 @@ fn insert_filesystem_permission_toml(
     entries: &mut BTreeMap<String, FilesystemPermissionToml>,
     entry: FileSystemSandboxEntry,
 ) {
+    if entry.skips_missing_path() {
+        return;
+    }
+
     match entry.path {
         FileSystemPath::Path { path } => {
             entries.insert(
@@ -526,6 +530,7 @@ fn compile_filesystem_permission(
             entries.push(FileSystemSandboxEntry {
                 path: compile_filesystem_access_path(path, *access, startup_warnings)?,
                 access: *access,
+                missing_path_behavior: None,
             });
         }
         FilesystemPermissionToml::Scoped(scoped_entries) => {
@@ -544,6 +549,7 @@ fn compile_filesystem_permission(
                             pattern: compile_scoped_filesystem_pattern(path, subpath, *access)?,
                         },
                         access: *access,
+                        missing_path_behavior: None,
                     };
                     entries.push(entry);
                 } else {
@@ -551,6 +557,7 @@ fn compile_filesystem_permission(
                     entries.push(FileSystemSandboxEntry {
                         path: compile_scoped_filesystem_path(path, subpath, startup_warnings)?,
                         access: *access,
+                        missing_path_behavior: None,
                     });
                 }
             }
@@ -592,7 +599,7 @@ fn compile_filesystem_path(
     }
 
     let path = parse_absolute_path(path)?;
-    Ok(FileSystemPath::Path { path })
+    Ok(path.into())
 }
 
 fn compile_scoped_filesystem_path(
@@ -629,7 +636,7 @@ fn compile_scoped_filesystem_path(
     let subpath = parse_relative_subpath(subpath)?;
     let base = parse_absolute_path(path)?;
     let path = AbsolutePathBuf::resolve_path_against_base(&subpath, base.as_path());
-    Ok(FileSystemPath::Path { path })
+    Ok(path.into())
 }
 
 fn compile_scoped_filesystem_pattern(
@@ -772,7 +779,10 @@ fn parse_special_path(path: &str) -> Option<FileSystemSpecialPath> {
     match path {
         ":root" => Some(FileSystemSpecialPath::Root),
         ":minimal" => Some(FileSystemSpecialPath::Minimal),
-        ":workspace_roots" => Some(FileSystemSpecialPath::project_roots(/*subpath*/ None)),
+        // `:project_roots` shipped before the canonical rename; keep it as an alias.
+        ":project_roots" | ":workspace_roots" => {
+            Some(FileSystemSpecialPath::project_roots(/*subpath*/ None))
+        }
         ":tmpdir" => Some(FileSystemSpecialPath::Tmpdir),
         ":slash_tmp" => Some(FileSystemSpecialPath::SlashTmp),
         _ if path.starts_with(':') => {

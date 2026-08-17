@@ -10,6 +10,169 @@ use pretty_assertions::assert_eq;
 use std::collections::VecDeque;
 
 #[tokio::test]
+async fn parent_owned_thread_blocks_all_direct_input_entry_points() {
+    let (mut chat, mut rx, mut op_rx) =
+        make_chatwidget_manual(/*model_override*/ Some("gpt-5")).await;
+    chat.thread_id = Some(ThreadId::new());
+    drain_insert_history(&mut rx);
+    chat.set_feature_enabled(Feature::CollaborationModes, /*enabled*/ true);
+    chat.set_parent_owned_thread();
+    chat.set_side_conversation_active(/*active*/ false);
+    chat.bottom_pane
+        .set_composer_text("keep this draft".to_string(), Vec::new(), Vec::new());
+    let before = chat.bottom_pane.composer_draft_snapshot();
+
+    chat.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+
+    let mut after = chat.bottom_pane.composer_draft_snapshot();
+    after.last_composer_activity_at = before.last_composer_activity_at;
+    assert_eq!(after, before);
+    assert_no_submit_op(&mut op_rx);
+    let rendered = drain_insert_history(&mut rx)
+        .into_iter()
+        .flatten()
+        .map(|line| line.to_string())
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert_chatwidget_snapshot!("parent_owned_thread_rejects_input", rendered);
+
+    let collaboration_mode_before = chat.active_collaboration_mask.clone();
+    let plan_mode = collaboration_modes::mask_for_kind(chat.model_catalog.as_ref(), ModeKind::Plan)
+        .expect("expected plan collaboration mode");
+    chat.submit_user_message_with_mode("Implement the plan.".to_string(), plan_mode);
+    assert_eq!(chat.active_collaboration_mask, collaboration_mode_before);
+    assert_no_submit_op(&mut op_rx);
+
+    for command in [
+        "/init",
+        "/review check this",
+        "/side inspect this",
+        "/archive",
+        "/rename",
+        "/agent parent",
+        "/diff now",
+        "!echo blocked",
+        " !echo blocked",
+    ] {
+        chat.bottom_pane
+            .set_composer_text(command.to_string(), Vec::new(), Vec::new());
+        let before = chat.bottom_pane.composer_draft_snapshot();
+        chat.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+        let mut after = chat.bottom_pane.composer_draft_snapshot();
+        after.last_composer_activity_at = before.last_composer_activity_at;
+        assert_eq!(after, before);
+        assert_no_submit_op(&mut op_rx);
+    }
+
+    assert!(!chat.submit_op(AppCommand::compact()));
+    assert_no_submit_op(&mut op_rx);
+}
+
+#[tokio::test]
+async fn parent_owned_thread_blocks_settings_shortcuts() {
+    let (mut chat, mut rx, _op_rx) =
+        make_chatwidget_manual(/*model_override*/ Some("gpt-5.4")).await;
+    chat.thread_id = Some(ThreadId::new());
+    chat.set_feature_enabled(Feature::CollaborationModes, /*enabled*/ true);
+    chat.set_reasoning_effort(Some(ReasoningEffortConfig::Medium));
+    chat.set_parent_owned_thread();
+    drain_insert_history(&mut rx);
+
+    let collaboration_mode_before = chat.active_collaboration_mask.clone();
+    let reasoning_effort_before = chat.current_reasoning_effort();
+
+    for key_event in [
+        KeyEvent::from(KeyCode::BackTab),
+        KeyEvent::new(KeyCode::Char('.'), KeyModifiers::ALT),
+        KeyEvent::new(KeyCode::Char(','), KeyModifiers::ALT),
+    ] {
+        chat.handle_key_event(key_event);
+    }
+
+    assert_eq!(chat.active_collaboration_mask, collaboration_mode_before);
+    assert_eq!(chat.current_reasoning_effort(), reasoning_effort_before);
+    let events = std::iter::from_fn(|| rx.try_recv().ok()).collect::<Vec<_>>();
+    assert!(events.iter().all(|event| !matches!(
+        event,
+        AppEvent::SubmitThreadOp { .. }
+            | AppEvent::UpdateModel(_)
+            | AppEvent::UpdateReasoningEffort(_)
+            | AppEvent::UpdatePlanModeReasoningEffort(_)
+    )));
+
+    let rendered = events
+        .into_iter()
+        .filter_map(|event| match event {
+            AppEvent::InsertHistoryCell(cell) => Some(cell.display_lines(/*width*/ 80)),
+            _ => None,
+        })
+        .flatten()
+        .map(|line| line.to_string())
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert_chatwidget_snapshot!("parent_owned_thread_rejects_settings_shortcuts", rendered);
+}
+
+#[tokio::test]
+async fn parent_owned_thread_restores_pending_initial_prompt() {
+    let (mut chat, _rx, mut op_rx) = make_chatwidget_manual(/*model_override*/ Some("gpt-5")).await;
+    let pending_prompt = "keep this startup prompt".to_string();
+    chat.initial_user_message = Some(pending_prompt.clone().into());
+    chat.set_parent_owned_thread();
+
+    chat.submit_initial_user_message_if_pending();
+
+    assert_eq!(chat.bottom_pane.composer_text(), pending_prompt);
+    assert!(chat.initial_user_message.is_none());
+
+    let (mut startup_chat, _startup_rx, _startup_op_rx) =
+        make_chatwidget_manual(/*model_override*/ None).await;
+    startup_chat.bottom_pane.set_composer_text(
+        "typed during startup".to_string(),
+        Vec::new(),
+        Vec::new(),
+    );
+    let mut pending_draft = Some(startup_chat.bottom_pane.composer_draft_snapshot());
+    chat.restore_startup_draft_when_ready(&mut pending_draft);
+
+    assert!(pending_draft.is_none());
+    assert_eq!(
+        chat.bottom_pane.composer_text(),
+        format!("{pending_prompt}\ntyped during startup")
+    );
+    assert_no_submit_op(&mut op_rx);
+}
+
+#[tokio::test]
+async fn parent_owned_thread_preserves_queued_input_before_draining() {
+    let (mut chat, _rx, mut op_rx) = make_chatwidget_manual(/*model_override*/ Some("gpt-5")).await;
+    let queued_message = QueuedUserMessage {
+        user_message: UserMessage::from("keep this queued prompt"),
+        action: QueuedInputAction::Plain,
+        pending_pastes: vec![("[Image 1]".to_string(), "pasted contents".to_string())],
+    };
+    let history_record = UserMessageHistoryRecord::UserMessageText;
+    chat.input_queue
+        .queued_user_messages
+        .push_back(queued_message.clone());
+    chat.input_queue
+        .queued_user_message_history_records
+        .push_back(history_record.clone());
+    chat.set_parent_owned_thread();
+
+    assert!(!chat.maybe_send_next_queued_input());
+    assert_eq!(
+        chat.input_queue.queued_user_messages,
+        VecDeque::from([queued_message])
+    );
+    assert_eq!(
+        chat.input_queue.queued_user_message_history_records,
+        VecDeque::from([history_record])
+    );
+    assert_no_submit_op(&mut op_rx);
+}
+
+#[tokio::test]
 async fn submission_preserves_text_elements_and_local_images() {
     let (mut chat, mut rx, mut op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
 
@@ -110,12 +273,14 @@ async fn submission_includes_configured_active_permission_profile() {
                         value: FileSystemSpecialPath::Root,
                     },
                     access: FileSystemAccessMode::Read,
+                    missing_path_behavior: None,
                 },
                 FileSystemSandboxEntry {
                     path: FileSystemPath::GlobPattern {
                         pattern: "/home/user/project/secrets/**".to_string(),
                     },
                     access: FileSystemAccessMode::Deny,
+                    missing_path_behavior: None,
                 },
             ],
             glob_scan_max_depth: None,
@@ -547,10 +712,9 @@ async fn submission_prefers_selected_duplicate_skill_path() {
             short_description: None,
             interface: None,
             dependencies: None,
-            policy: None,
-            path_to_skills_md: repo_skill_path,
+            path: repo_skill_path,
             scope: crate::test_support::skill_scope_repo(),
-            plugin_id: None,
+            enabled: true,
         },
         SkillMetadata {
             name: "figma".to_string(),
@@ -558,10 +722,9 @@ async fn submission_prefers_selected_duplicate_skill_path() {
             short_description: None,
             interface: None,
             dependencies: None,
-            policy: None,
-            path_to_skills_md: user_skill_path.clone(),
+            path: user_skill_path.clone(),
             scope: crate::test_support::skill_scope_user(),
-            plugin_id: None,
+            enabled: true,
         },
     ]));
 
@@ -688,6 +851,267 @@ async fn blocked_image_restore_with_remote_images_keeps_local_placeholder_mappin
     assert_eq!(chat.bottom_pane.composer_text_elements(), text_elements);
     assert_eq!(chat.bottom_pane.composer_local_images(), local_images);
     assert_eq!(chat.remote_image_urls(), remote_image_urls);
+}
+
+#[tokio::test]
+async fn startup_draft_handoff_preserves_cursor_and_large_paste() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    let paste = "x".repeat(/*n*/ 1_001);
+    chat.bottom_pane.handle_paste(paste);
+    chat.bottom_pane.insert_str(" tail");
+    chat.bottom_pane.set_composer_cursor(/*cursor*/ 0);
+    let startup_draft = chat.bottom_pane.composer_draft_snapshot();
+    chat.bottom_pane
+        .set_composer_text(String::new(), Vec::new(), Vec::new());
+
+    chat.restore_startup_draft(startup_draft.clone());
+
+    assert_eq!(chat.bottom_pane.composer_draft_snapshot(), startup_draft);
+}
+
+#[tokio::test]
+async fn startup_draft_handoff_merges_existing_prompt_images_and_large_pastes() {
+    let (mut startup_chat, _startup_rx, _startup_op_rx) =
+        make_chatwidget_manual(/*model_override*/ None).await;
+    let startup_paste = "x".repeat(/*n*/ 1_001);
+    startup_chat.bottom_pane.handle_paste(startup_paste.clone());
+    startup_chat.bottom_pane.insert_str(" startup draft");
+    startup_chat.bottom_pane.set_composer_cursor(/*cursor*/ 0);
+    let startup_draft = startup_chat.bottom_pane.composer_draft_snapshot();
+
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    let image_placeholder = "[Image #1]";
+    let image_path = PathBuf::from("/tmp/initial-prompt.png");
+    chat.bottom_pane.set_composer_text(
+        format!("{image_placeholder} initial prompt "),
+        vec![TextElement::new(
+            (0..image_placeholder.len()).into(),
+            Some(image_placeholder.to_string()),
+        )],
+        vec![image_path.clone()],
+    );
+    let initial_paste = "y".repeat(/*n*/ 1_001);
+    chat.bottom_pane.handle_paste(initial_paste.clone());
+    let existing_draft = chat.bottom_pane.composer_draft_snapshot();
+    let existing_placeholder = existing_draft.pending_pastes[0].0.clone();
+
+    chat.restore_startup_draft(startup_draft);
+
+    let restored = chat.bottom_pane.composer_draft_snapshot();
+    assert_eq!(
+        (
+            restored.text,
+            restored.cursor,
+            restored.pending_pastes,
+            restored.local_images,
+        ),
+        (
+            format!(
+                "{}\n{existing_placeholder} #2 startup draft",
+                existing_draft.text
+            ),
+            existing_draft.text.len() + 1,
+            vec![
+                (existing_placeholder.clone(), initial_paste),
+                (format!("{existing_placeholder} #2"), startup_paste),
+            ],
+            vec![LocalImageAttachment {
+                placeholder: image_placeholder.to_string(),
+                path: image_path,
+            }],
+        )
+    );
+}
+
+#[tokio::test]
+async fn startup_draft_handoff_rebases_cursor_around_colliding_large_pastes() {
+    for (cursor_marker, expected_added_bytes) in [("é", 0), (" 中 ", 3), (" tail", 6)] {
+        let (mut startup_chat, _startup_rx, _startup_op_rx) =
+            make_chatwidget_manual(/*model_override*/ None).await;
+        startup_chat.bottom_pane.insert_str("é");
+        startup_chat
+            .bottom_pane
+            .handle_paste("x".repeat(/*n*/ 1_001));
+        startup_chat.bottom_pane.insert_str(" 中 ");
+        startup_chat
+            .bottom_pane
+            .handle_paste("y".repeat(/*n*/ 1_002));
+        startup_chat.bottom_pane.insert_str(" tail");
+        let startup_text = startup_chat.bottom_pane.composer_text();
+        let startup_cursor = startup_text
+            .find(cursor_marker)
+            .expect("cursor marker should be present")
+            + cursor_marker.len();
+        startup_chat.bottom_pane.set_composer_cursor(startup_cursor);
+        let startup_draft = startup_chat.bottom_pane.composer_draft_snapshot();
+
+        let (mut chat, _rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+        chat.bottom_pane.handle_paste("a".repeat(/*n*/ 1_001));
+        chat.bottom_pane.insert_str(" ");
+        chat.bottom_pane.handle_paste("b".repeat(/*n*/ 1_002));
+        let existing_text = chat.bottom_pane.composer_text();
+
+        chat.restore_startup_draft(startup_draft);
+
+        let first_placeholder = "[Pasted Content 1001 chars] #2";
+        let second_placeholder = "[Pasted Content 1002 chars] #2";
+        let expected_text =
+            format!("{existing_text}\né{first_placeholder} 中 {second_placeholder} tail");
+        let expected_cursor = existing_text.len() + 1 + startup_cursor + expected_added_bytes;
+        assert_eq!(chat.bottom_pane.composer_text(), expected_text);
+        assert_eq!(chat.bottom_pane.composer_cursor(), expected_cursor);
+
+        chat.bottom_pane.insert_str("✓");
+        let mut expected_edited_text = expected_text;
+        expected_edited_text.insert(expected_cursor, '✓');
+        assert_eq!(chat.bottom_pane.composer_text(), expected_edited_text);
+    }
+}
+
+#[tokio::test]
+async fn startup_draft_handoff_preserves_cleared_history_across_session_configuration() {
+    for configure_before_restore in [false, true] {
+        let (mut startup_chat, _startup_rx, _startup_op_rx) =
+            make_chatwidget_manual(/*model_override*/ None).await;
+        for text in ["first startup draft", "second startup draft"] {
+            startup_chat
+                .bottom_pane
+                .set_composer_text(text.to_string(), Vec::new(), Vec::new());
+            startup_chat.bottom_pane.on_ctrl_c();
+        }
+        let paste = "x".repeat(/*n*/ 1_001);
+        startup_chat.bottom_pane.handle_paste(paste.clone());
+        let placeholder = startup_chat.bottom_pane.composer_text();
+        startup_chat.bottom_pane.on_ctrl_c();
+        let mut pending_draft = Some(startup_chat.bottom_pane.composer_draft_snapshot());
+
+        let (mut chat, _rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+        if configure_before_restore {
+            chat.bottom_pane.set_history_metadata(
+                ThreadId::new(),
+                /*log_id*/ 1,
+                /*entry_count*/ 0,
+            );
+        }
+        chat.restore_startup_draft_when_ready(&mut pending_draft);
+        if !configure_before_restore {
+            chat.bottom_pane.set_history_metadata(
+                ThreadId::new(),
+                /*log_id*/ 1,
+                /*entry_count*/ 0,
+            );
+        }
+
+        assert!(pending_draft.is_none());
+        assert!(chat.bottom_pane.composer_is_empty());
+        chat.bottom_pane
+            .handle_key_event(KeyEvent::new(KeyCode::Up, KeyModifiers::NONE));
+        let restored = chat.bottom_pane.composer_draft_snapshot();
+        assert_eq!(
+            (
+                restored.text,
+                restored.text_elements,
+                restored.pending_pastes
+            ),
+            (
+                placeholder.clone(),
+                vec![TextElement::new(
+                    (0..placeholder.len()).into(),
+                    Some(placeholder.clone()),
+                )],
+                vec![(placeholder, paste)],
+            )
+        );
+        for expected in ["second startup draft", "first startup draft"] {
+            chat.bottom_pane
+                .handle_key_event(KeyEvent::new(KeyCode::Up, KeyModifiers::NONE));
+            assert_eq!(chat.bottom_pane.composer_text(), expected);
+        }
+    }
+}
+
+#[tokio::test]
+async fn startup_draft_handoff_keeps_vim_insert_mode_for_nonempty_drafts() {
+    for (text, expected) in [("draft", "draftx"), ("", "")] {
+        let (mut startup_chat, _startup_rx, _startup_op_rx) =
+            make_chatwidget_manual(/*model_override*/ None).await;
+        startup_chat.bottom_pane.insert_str(text);
+        let startup_draft = startup_chat.bottom_pane.composer_draft_snapshot();
+
+        let (mut chat, _rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+        chat.config.tui_vim_mode_default = true;
+        chat.bottom_pane.set_vim_enabled(/*enabled*/ true);
+        chat.restore_startup_draft(startup_draft);
+        chat.bottom_pane
+            .handle_key_event(KeyEvent::new(KeyCode::Char('x'), KeyModifiers::NONE));
+        chat.bottom_pane
+            .handle_key_event(KeyEvent::new(KeyCode::Right, KeyModifiers::NONE));
+
+        assert_eq!(chat.bottom_pane.composer_text(), expected);
+    }
+}
+
+#[tokio::test]
+async fn startup_draft_handoff_syncs_file_search_with_restored_interior_cursor() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    let text = "inspect @src before continuing";
+    let cursor = text.find(" before").expect("file token has trailing text");
+    chat.bottom_pane
+        .set_composer_text(text.to_string(), Vec::new(), Vec::new());
+    chat.bottom_pane.set_composer_cursor(cursor);
+    let startup_draft = chat.bottom_pane.composer_draft_snapshot();
+    chat.bottom_pane
+        .set_composer_text(String::new(), Vec::new(), Vec::new());
+    while rx.try_recv().is_ok() {}
+
+    chat.restore_startup_draft(startup_draft.clone());
+
+    assert_eq!(chat.bottom_pane.composer_draft_snapshot(), startup_draft);
+    assert!(!chat.bottom_pane.no_modal_or_popup_active());
+    assert!(
+        std::iter::from_fn(|| rx.try_recv().ok())
+            .any(|event| matches!(event, AppEvent::StartFileSearch(query) if query == "src"))
+    );
+}
+
+#[tokio::test]
+async fn startup_draft_file_search_waits_for_protected_view_and_enabled_input() {
+    let (mut startup_chat, _startup_rx, _startup_op_rx) =
+        make_chatwidget_manual(/*model_override*/ None).await;
+    startup_chat
+        .bottom_pane
+        .set_composer_text("inspect @src".to_string(), Vec::new(), Vec::new());
+    let mut pending_draft = Some(startup_chat.bottom_pane.composer_draft_snapshot());
+
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    chat.open_approvals_popup();
+    while rx.try_recv().is_ok() {}
+
+    chat.restore_startup_draft_when_ready(&mut pending_draft);
+    assert!(chat.has_active_view());
+    assert!(pending_draft.is_some());
+    assert!(rx.try_recv().is_err());
+
+    chat.handle_key_event(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
+    assert!(!chat.has_active_view());
+    chat.bottom_pane
+        .set_composer_input_enabled(/*enabled*/ false, /*placeholder*/ None);
+    chat.restore_startup_draft_when_ready(&mut pending_draft);
+    assert!(pending_draft.is_some());
+    assert!(
+        std::iter::from_fn(|| rx.try_recv().ok())
+            .all(|event| !matches!(event, AppEvent::StartFileSearch(_)))
+    );
+
+    chat.bottom_pane
+        .set_composer_input_enabled(/*enabled*/ true, /*placeholder*/ None);
+    chat.restore_startup_draft_when_ready(&mut pending_draft);
+
+    assert!(pending_draft.is_none());
+    assert!(
+        std::iter::from_fn(|| rx.try_recv().ok())
+            .any(|event| matches!(event, AppEvent::StartFileSearch(query) if query == "src"))
+    );
 }
 
 #[tokio::test]
@@ -1220,7 +1644,7 @@ async fn restore_thread_input_state_applies_running_state_policy() {
 async fn alt_up_edits_most_recent_queued_message() {
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
     chat.chat_keymap.edit_queued_message = vec![crate::key_hint::alt(KeyCode::Up)];
-    chat.queued_message_edit_hint_binding = Some(crate::key_hint::alt(KeyCode::Up));
+    chat.queued_message_edit_hint_binding = Some(crate::key_hint::alt(KeyCode::Up).into());
     chat.bottom_pane
         .set_queued_message_edit_binding(chat.queued_message_edit_hint_binding);
 
@@ -1249,6 +1673,92 @@ async fn alt_up_edits_most_recent_queued_message() {
     assert_eq!(
         chat.input_queue.queued_user_messages.front().unwrap().text,
         "first queued"
+    );
+}
+
+#[tokio::test]
+async fn vim_normal_history_up_edits_queued_message_without_duplicating_it() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    chat.thread_id = Some(ThreadId::new());
+    chat.toggle_vim_mode_and_notify();
+    chat.bottom_pane.set_task_running(/*running*/ true);
+    chat.bottom_pane
+        .set_composer_text("first queued message".to_string(), Vec::new(), Vec::new());
+    chat.handle_key_event(KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE));
+
+    for expected in ["first queued message", "first queued message edited"] {
+        chat.handle_key_event(KeyEvent::new(KeyCode::Char('k'), KeyModifiers::NONE));
+
+        assert_eq!(chat.bottom_pane.composer_text(), expected);
+        assert!(chat.input_queue.queued_user_messages.is_empty());
+        assert!(
+            chat.input_queue
+                .queued_user_message_history_records
+                .is_empty()
+        );
+
+        chat.bottom_pane
+            .set_composer_text(format!("{expected} edited"), Vec::new(), Vec::new());
+        chat.handle_key_event(KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE));
+        assert_eq!(chat.input_queue.queued_user_messages.len(), 1);
+        assert_eq!(
+            chat.input_queue.queued_user_message_history_records.len(),
+            1
+        );
+    }
+
+    assert_eq!(
+        chat.queued_user_message_texts(),
+        vec!["first queued message edited edited".to_string()]
+    );
+}
+
+#[tokio::test]
+async fn vim_normal_queued_message_edit_uses_remapped_history_up() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    let mut keymap = crate::keymap::RuntimeKeymap::defaults();
+    keymap.vim_normal.move_up = vec![crate::key_hint::plain(KeyCode::F(2))];
+    chat.bottom_pane.set_keymap_bindings(&keymap);
+    chat.toggle_vim_mode_and_notify();
+    chat.bottom_pane.set_task_running(/*running*/ true);
+    chat.input_queue
+        .queued_user_messages
+        .push_back(UserMessage::from("queued message").into());
+    chat.input_queue
+        .queued_user_message_history_records
+        .push_back(UserMessageHistoryRecord::UserMessageText);
+    chat.refresh_pending_input_preview();
+
+    chat.handle_key_event(KeyEvent::new(KeyCode::Char('k'), KeyModifiers::NONE));
+
+    assert!(chat.bottom_pane.composer_is_empty());
+    assert_eq!(chat.input_queue.queued_user_messages.len(), 1);
+
+    chat.handle_key_event(KeyEvent::new(KeyCode::F(2), KeyModifiers::NONE));
+
+    assert_eq!(chat.bottom_pane.composer_text(), "queued message");
+    assert!(chat.input_queue.queued_user_messages.is_empty());
+    assert!(
+        chat.input_queue
+            .queued_user_message_history_records
+            .is_empty()
+    );
+
+    let width = 80;
+    let height = chat.desired_height(width);
+    let mut terminal = ratatui::Terminal::new(ratatui::backend::TestBackend::new(width, height))
+        .expect("create terminal");
+    terminal
+        .draw(|frame| chat.render(frame.area(), frame.buffer_mut()))
+        .expect("render restored queued message");
+    insta::assert_snapshot!(
+        normalized_backend_snapshot(terminal.backend())
+            .lines()
+            .filter(|line| line.contains("queued message"))
+            .map(|line| line.trim_matches('"').trim())
+            .collect::<Vec<_>>()
+            .join("\n"),
+        @"› queued message"
     );
 }
 
@@ -1317,6 +1827,42 @@ async fn shift_left_edits_most_recent_queued_message_in_tmux() {
         multiplexer: Some(Multiplexer::Tmux { version: None }),
     })
     .await;
+}
+
+#[test]
+fn queued_message_edit_hint_displays_configured_chords() {
+    use codex_config::types::KeybindingSpec;
+    use codex_config::types::KeybindingsSpec;
+    use codex_config::types::TuiKeymap;
+
+    let terminal_info = || TerminalInfo {
+        name: TerminalName::Iterm2,
+        term_program: None,
+        version: None,
+        term: None,
+        multiplexer: None,
+    };
+    let mut config = TuiKeymap::default();
+    config.chat.edit_queued_message = Some(KeybindingsSpec::One(KeybindingSpec(
+        "ctrl-x up".to_string(),
+    )));
+    let keymap = RuntimeKeymap::from_config(&config).expect("valid queued edit chord");
+
+    assert_eq!(
+        queued_message_edit_hint_binding(&keymap, terminal_info()),
+        Some(crate::key_hint::ShortcutHint::Chord {
+            prefix: crate::key_hint::ctrl(KeyCode::Char('x')),
+            completion: crate::key_hint::plain(KeyCode::Up),
+        })
+    );
+
+    let default_keymap = RuntimeKeymap::defaults();
+    assert_eq!(
+        queued_message_edit_hint_binding(&default_keymap, terminal_info()),
+        Some(crate::key_hint::ShortcutHint::Single(crate::key_hint::alt(
+            KeyCode::Up,
+        )))
+    );
 }
 
 #[test]

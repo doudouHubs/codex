@@ -14,6 +14,7 @@ use crossterm::terminal::EnterAlternateScreen;
 use crossterm::terminal::LeaveAlternateScreen;
 use ratatui::crossterm::execute;
 use ratatui::layout::Rect;
+use ratatui::layout::Size;
 
 use crate::key_hint;
 
@@ -200,7 +201,7 @@ pub(crate) enum PreparedResumeAction {
 }
 
 impl PreparedResumeAction {
-    pub(crate) fn apply(self, terminal: &mut Terminal) -> Result<()> {
+    pub(crate) fn apply(self, terminal: &mut Terminal, screen_size: Size) -> Result<()> {
         match self {
             PreparedResumeAction::RealignViewport(area) => {
                 terminal.set_viewport_area(area);
@@ -218,10 +219,8 @@ impl PreparedResumeAction {
                 if mouse_capture_enabled {
                     super::enable_mouse_capture_mode(terminal.backend_mut())?;
                 }
-                if let Ok(size) = terminal.size() {
-                    terminal.set_viewport_area(Rect::new(0, 0, size.width, size.height));
-                    terminal.clear()?;
-                }
+                terminal.set_viewport_area(Rect::from(screen_size));
+                terminal.clear()?;
             }
         }
         Ok(())

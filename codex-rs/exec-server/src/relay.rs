@@ -2,18 +2,16 @@ use std::collections::HashMap;
 use std::time::Duration;
 
 use codex_exec_server_protocol::JSONRPCMessage;
+use codex_protocol::protocol::W3cTraceContext;
 use futures::Sink;
 use futures::SinkExt;
 use futures::Stream;
 use futures::StreamExt;
 use prost::Message as ProstMessage;
-use tokio::io::AsyncRead;
-use tokio::io::AsyncWrite;
 use tokio::sync::mpsc;
 use tokio::sync::watch;
 use tokio::task::JoinSet;
 use tokio::time::timeout;
-use tokio_tungstenite::WebSocketStream;
 use tokio_tungstenite::tungstenite::Message;
 use tracing::debug;
 use tracing::info;
@@ -84,18 +82,27 @@ pub(crate) enum RelayFrameBodyKind {
 }
 
 impl RelayMessageFrame {
-    pub(crate) fn data(stream_id: String, seq: u32, payload: Vec<u8>) -> Self {
+    pub(crate) fn data(
+        stream_id: String,
+        seq: u32,
+        payload: Vec<u8>,
+        trace: Option<W3cTraceContext>,
+    ) -> Self {
+        let (traceparent, tracestate) = trace
+            .map(|trace| (trace.traceparent, trace.tracestate))
+            .unwrap_or_default();
         Self {
             version: RELAY_MESSAGE_FRAME_VERSION,
             stream_id,
-            ack: 0,
-            ack_bits: 0,
+            traceparent,
+            tracestate,
             body: Some(relay_message_frame::Body::Data(RelayData {
                 seq,
                 segment_index: 0,
                 segment_count: 1,
                 payload,
             })),
+            ..Self::default()
         }
     }
 
@@ -103,11 +110,10 @@ impl RelayMessageFrame {
         Self {
             version: RELAY_MESSAGE_FRAME_VERSION,
             stream_id,
-            ack: 0,
-            ack_bits: 0,
             body: Some(relay_message_frame::Body::Resume(RelayResume {
                 next_seq: 0,
             })),
+            ..Self::default()
         }
     }
 
@@ -115,11 +121,10 @@ impl RelayMessageFrame {
         Self {
             version: RELAY_MESSAGE_FRAME_VERSION,
             stream_id,
-            ack: 0,
-            ack_bits: 0,
             body: Some(relay_message_frame::Body::Handshake(RelayHandshake {
                 payload,
             })),
+            ..Self::default()
         }
     }
 
@@ -127,9 +132,8 @@ impl RelayMessageFrame {
         Self {
             version: RELAY_MESSAGE_FRAME_VERSION,
             stream_id,
-            ack: 0,
-            ack_bits: 0,
             body: Some(relay_message_frame::Body::Reset(RelayReset { reason })),
+            ..Self::default()
         }
     }
 
@@ -316,7 +320,13 @@ where
                             break;
                         }
                     };
-                    let frame = RelayMessageFrame::data(stream_id.clone(), next_seq, payload);
+                    let trace = match message {
+                        JSONRPCMessage::Request(request) => request.trace,
+                        JSONRPCMessage::Notification(_)
+                        | JSONRPCMessage::Response(_)
+                        | JSONRPCMessage::Error(_) => None,
+                    };
+                    let frame = RelayMessageFrame::data(stream_id.clone(), next_seq, payload, trace);
                     next_seq = next_seq.wrapping_add(1);
                     if websocket
                         .send(Message::Binary(encode_relay_message_frame(&frame).into()))
@@ -465,8 +475,8 @@ pub(crate) trait HarnessKeyValidator: Send + Sync {
 /// Parsing the first Noise message authenticates the harness key. Only a
 /// successful registry check turns that pending handshake into a virtual stream.
 #[tracing::instrument(level = "debug", skip_all, fields(noise_side = "executor"))]
-pub(crate) async fn run_multiplexed_environment<S, V>(
-    stream: WebSocketStream<S>,
+pub(crate) async fn run_multiplexed_environment<T, E, V>(
+    stream: T,
     processor: ConnectionProcessor,
     environment_id: String,
     executor_registration_id: String,
@@ -474,7 +484,8 @@ pub(crate) async fn run_multiplexed_environment<S, V>(
     validator: V,
 ) -> RendezvousDisconnectReason
 where
-    S: AsyncRead + AsyncWrite + Unpin + Send + 'static,
+    T: Sink<Message, Error = E> + Stream<Item = Result<Message, E>> + Unpin + Send + 'static,
+    E: std::fmt::Display + Send + 'static,
     V: HarnessKeyValidator + Clone + 'static,
 {
     debug!(
@@ -963,6 +974,7 @@ mod tests {
                     stream_id,
                     /*seq*/ 0,
                     jsonrpc_payload(&message)?,
+                    /*trace*/ None,
                 ))
                 .into(),
             ))

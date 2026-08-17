@@ -7,10 +7,10 @@ use super::*;
 
 impl ChatWidget {
     pub(super) fn on_exec_approval_request(&mut self, _id: String, ev: ExecApprovalRequestEvent) {
-        let ev2 = ev.clone();
         self.defer_or_handle(
-            |q| q.push_exec_approval(ev),
-            |s| s.handle_exec_approval_now(ev2),
+            ev,
+            InterruptManager::push_exec_approval,
+            Self::handle_exec_approval_now,
         );
     }
 
@@ -19,10 +19,10 @@ impl ChatWidget {
         _id: String,
         ev: ApplyPatchApprovalRequestEvent,
     ) {
-        let ev2 = ev.clone();
         self.defer_or_handle(
-            |q| q.push_apply_patch_approval(ev),
-            |s| s.handle_apply_patch_approval_now(ev2),
+            ev,
+            InterruptManager::push_apply_patch_approval,
+            Self::handle_apply_patch_approval_now,
         );
     }
 
@@ -31,8 +31,8 @@ impl ChatWidget {
     /// In-progress assessments temporarily own the live status footer so the
     /// user can see what is being reviewed, including parallel review
     /// aggregation. Terminal assessments clear or update that footer state and
-    /// render the final approved/denied history cell when guardian returns a
-    /// decision.
+    /// render denied or timed-out decisions in history. Approved assessments
+    /// silently complete after updating the footer.
     pub(super) fn on_guardian_assessment(&mut self, ev: GuardianAssessmentEvent) {
         let permission_request_summary = |subject: &str, reason: &Option<String>| {
             reason
@@ -119,8 +119,8 @@ impl ChatWidget {
             return;
         }
 
-        // Terminal assessments remove the matching pending footer entry first,
-        // then render the final approved/denied history cell below.
+        // Terminal assessments remove the matching pending footer entry before
+        // any decision-specific history handling.
         if self
             .status_state
             .pending_guardian_review_status
@@ -147,21 +147,6 @@ impl ChatWidget {
         }
 
         if ev.status == GuardianAssessmentStatus::Approved {
-            let cell = if let Some(command) = guardian_command(&ev.action) {
-                history_cell::new_approval_decision_cell(
-                    history_cell::ApprovalDecisionSubject::Command(command),
-                    crate::history_cell::ReviewDecision::Approved,
-                    history_cell::ApprovalDecisionActor::Guardian,
-                )
-            } else if let Some(summary) = guardian_action_summary(&ev.action) {
-                history_cell::new_guardian_approved_action_request(summary)
-            } else {
-                let summary = serde_json::to_string(&ev.action)
-                    .unwrap_or_else(|_| "<unrenderable guardian action>".to_string());
-                history_cell::new_guardian_approved_action_request(summary)
-            };
-
-            self.add_boxed_history(cell);
             self.request_redraw();
             return;
         }
@@ -256,32 +241,32 @@ impl ChatWidget {
         request_id: AppServerRequestId,
         params: McpServerElicitationRequestParams,
     ) {
-        let request_id2 = request_id.clone();
-        let params2 = params.clone();
         self.defer_or_handle(
-            |q| q.push_elicitation(request_id, params),
-            |s| s.handle_elicitation_request_now(request_id2, params2),
+            (request_id, params),
+            |q, (request_id, params)| q.push_elicitation(request_id, params),
+            |s, (request_id, params)| s.handle_elicitation_request_now(request_id, params),
         );
     }
 
     pub(super) fn on_request_user_input(&mut self, ev: ToolRequestUserInputParams) {
-        let ev2 = ev.clone();
         self.defer_or_handle(
-            |q| q.push_user_input(ev),
-            |s| s.handle_request_user_input_now(ev2),
+            ev,
+            InterruptManager::push_user_input,
+            Self::handle_request_user_input_now,
         );
     }
 
     pub(super) fn on_request_permissions(&mut self, ev: RequestPermissionsEvent) {
-        let ev2 = ev.clone();
         self.defer_or_handle(
-            |q| q.push_request_permissions(ev),
-            |s| s.handle_request_permissions_now(ev2),
+            ev,
+            InterruptManager::push_request_permissions,
+            Self::handle_request_permissions_now,
         );
     }
 
     pub(crate) fn handle_exec_approval_now(&mut self, ev: ExecApprovalRequestEvent) {
         self.flush_answer_stream_with_separator();
+        self.flush_completed_command_activity();
         let command = shlex::try_join(ev.command.iter().map(String::as_str))
             .unwrap_or_else(|_| ev.command.join(" "));
         self.notify(Notification::ExecApprovalRequested { command });
@@ -309,13 +294,15 @@ impl ChatWidget {
 
     pub(crate) fn handle_apply_patch_approval_now(&mut self, ev: ApplyPatchApprovalRequestEvent) {
         self.flush_answer_stream_with_separator();
+        self.flush_completed_command_activity();
 
+        let changed_paths = ev.changes.keys().cloned().collect();
         let request = ApprovalRequest::ApplyPatch(ApplyPatchApprovalRequest {
             thread_id: self.thread_id.unwrap_or_default(),
             thread_label: None,
             id: ev.call_id,
             reason: ev.reason,
-            changes: ev.changes.clone(),
+            changes: ev.changes,
             cwd: self.config.cwd.clone(),
         });
         self.bottom_pane
@@ -327,7 +314,7 @@ impl ChatWidget {
         self.request_redraw();
         self.notify(Notification::EditApprovalRequested {
             cwd: self.config.cwd.to_path_buf(),
-            changes: ev.changes.keys().cloned().collect(),
+            changes: changed_paths,
         });
     }
 
@@ -337,6 +324,7 @@ impl ChatWidget {
         params: McpServerElicitationRequestParams,
     ) {
         self.flush_answer_stream_with_separator();
+        self.flush_completed_command_activity();
 
         self.notify(Notification::ElicitationRequested {
             server_name: params.server_name.clone(),
@@ -354,7 +342,7 @@ impl ChatWidget {
         } else if let Some(request) = McpServerElicitationFormRequest::from_app_server_request(
             thread_id,
             request_id.clone(),
-            params.clone(),
+            &params,
         ) {
             self.bottom_pane
                 .push_mcp_server_elicitation_request(request);
@@ -392,6 +380,7 @@ impl ChatWidget {
     }
 
     pub(crate) fn push_approval_request(&mut self, request: ApprovalRequest) {
+        self.flush_completed_command_activity();
         self.bottom_pane
             .push_approval_request(request, &self.config.features);
         self.set_ambient_pet_notification(
@@ -405,6 +394,7 @@ impl ChatWidget {
         &mut self,
         request: McpServerElicitationFormRequest,
     ) {
+        self.flush_completed_command_activity();
         self.bottom_pane
             .push_mcp_server_elicitation_request(request);
         self.set_ambient_pet_notification(
@@ -416,6 +406,7 @@ impl ChatWidget {
 
     pub(crate) fn handle_request_user_input_now(&mut self, ev: ToolRequestUserInputParams) {
         self.flush_answer_stream_with_separator();
+        self.flush_completed_command_activity();
         let question_count = ev.questions.len();
         let summary = Notification::user_input_request_summary(&ev.questions);
         let title = match (question_count, summary.as_deref()) {
@@ -434,6 +425,7 @@ impl ChatWidget {
 
     pub(crate) fn handle_request_permissions_now(&mut self, ev: RequestPermissionsEvent) {
         self.flush_answer_stream_with_separator();
+        self.flush_completed_command_activity();
         let request = ApprovalRequest::Permissions(PermissionsApprovalRequest {
             thread_id: self.thread_id.unwrap_or_default(),
             thread_label: None,

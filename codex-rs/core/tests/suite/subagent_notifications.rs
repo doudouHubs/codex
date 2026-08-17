@@ -1,23 +1,31 @@
 use anyhow::Result;
 use codex_core::StartThreadOptions;
 use codex_core::ThreadConfigSnapshot;
+use codex_core::TurnInputRequest;
 use codex_core::config::AgentRoleConfig;
+use codex_core::config::CurrentTimeReminderConfig;
 use codex_features::Feature;
+use codex_history::RolloutItem;
 use codex_models_manager::bundled_models_response;
 use codex_protocol::ThreadId;
 use codex_protocol::config_types::ReasoningSummary;
 use codex_protocol::models::PermissionProfile;
+use codex_protocol::openai_models::MultiAgentMessages;
+use codex_protocol::openai_models::MultiAgentRoleMessages;
 use codex_protocol::openai_models::ReasoningEffort;
+use codex_protocol::protocol::AgentStatus;
 use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::EventMsg;
-use codex_protocol::protocol::InitialHistory;
 use codex_protocol::protocol::Op;
 use codex_protocol::protocol::SessionSource;
 use codex_protocol::protocol::SubAgentSource;
 use codex_protocol::protocol::ThreadHistoryMode;
+use codex_protocol::protocol::ThreadSettingsOverrides;
 use codex_protocol::user_input::UserInput;
 use core_test_support::hooks::trust_discovered_hooks;
 use core_test_support::responses::ResponsesRequest;
+use core_test_support::responses::assert_parent_turn;
+use core_test_support::responses::assert_root_turn;
 use core_test_support::responses::ev_assistant_message;
 use core_test_support::responses::ev_completed;
 use core_test_support::responses::ev_function_call_with_namespace;
@@ -31,11 +39,13 @@ use core_test_support::responses::sse;
 use core_test_support::responses::sse_response;
 use core_test_support::responses::start_mock_server;
 use core_test_support::responses::strip_metadata_from_json;
+use core_test_support::responses::strip_response_item_ids_from_json;
 use core_test_support::skip_if_no_network;
 use core_test_support::test_codex::TestCodex;
 use core_test_support::test_codex::local_selections;
 use core_test_support::test_codex::test_codex;
 use core_test_support::test_codex::turn_permission_fields;
+use core_test_support::wait_for_event;
 use core_test_support::wait_for_event_match;
 use pretty_assertions::assert_eq;
 use serde_json::Value;
@@ -796,19 +806,10 @@ async fn subagent_stop_replaces_stop_and_skips_internal_subagents() -> Result<()
     // because the SubagentStop hook above intentionally matches all agent types.
     let internal_thread = test
         .thread_manager
-        .start_thread_with_options(StartThreadOptions {
-            config: test.config.clone(),
-            allow_provider_model_fallback: false,
-            initial_history: InitialHistory::New,
-            history_mode: None,
+        .start_thread(StartThreadOptions {
             session_source: Some(SessionSource::SubAgent(SubAgentSource::Review)),
-            thread_source: None,
-            dynamic_tools: Vec::new(),
-            metrics_service_name: None,
-            parent_trace: None,
-            environments: Vec::new(),
-            thread_extension_init: Default::default(),
-            supports_openai_form_elicitation: false,
+            environments: Some(Vec::new()),
+            ..StartThreadOptions::new(test.config.clone())
         })
         .await?;
 
@@ -816,23 +817,20 @@ async fn subagent_stop_replaces_stop_and_skips_internal_subagents() -> Result<()
         turn_permission_fields(PermissionProfile::Disabled, test.cwd_path());
     internal_thread
         .thread
-        .submit(Op::UserInput {
-            items: vec![UserInput::Text {
+        .start_or_steer_turn(
+            TurnInputRequest::user_input(vec![UserInput::Text {
                 text: INTERNAL_SUBAGENT_PROMPT.to_string(),
                 text_elements: Vec::new(),
-            }],
-            final_output_json_schema: None,
-            responsesapi_client_metadata: None,
-            additional_context: Default::default(),
-            thread_settings: codex_protocol::protocol::ThreadSettingsOverrides {
+            }])
+            .with_thread_settings(ThreadSettingsOverrides {
                 environments: Some(local_selections(test.config.cwd.clone())),
                 approval_policy: Some(AskForApproval::Never),
                 sandbox_policy: Some(sandbox_policy),
                 permission_profile,
                 model: Some(internal_thread.session_configured.model.clone()),
                 ..Default::default()
-            },
-        })
+            }),
+        )
         .await?;
     let turn_id = wait_for_event_match(internal_thread.thread.as_ref(), |event| match event {
         EventMsg::TurnStarted(event) => Some(event.turn_id.clone()),
@@ -960,17 +958,24 @@ async fn spawned_child_receives_forked_parent_context(
             config.agent_default_subagent_model = Some(REQUESTED_MODEL.to_string());
             config.agent_default_subagent_reasoning_effort = Some(REQUESTED_REASONING_EFFORT);
         });
-    let test = builder.build(&server).await?;
+    let test = builder.build_with_auto_env(&server).await?;
 
     test.submit_turn(TURN_0_FORK_PROMPT).await?;
     let _ = seed_turn.single_request();
 
     test.submit_turn(TURN_1_PROMPT).await?;
-    let _ = spawn_turn.single_request();
+    let parent_body = spawn_turn.single_request().body_json();
 
     let child_request = wait_for_request_with_model(&child_request_log, REQUESTED_MODEL).await?;
     assert!(child_request.body_contains_text(TURN_0_FORK_PROMPT));
     let child_body = child_request.body_json();
+    let original_parent_turn_id = parent_body["client_metadata"]["turn_id"]
+        .as_str()
+        .expect("legacy spawn parent turn id");
+    assert_parent_turn(&parent_body, /*expected*/ None)?;
+    assert_parent_turn(&child_body, Some(original_parent_turn_id))?;
+    assert_root_turn(&parent_body, Some(original_parent_turn_id))?;
+    assert_root_turn(&child_body, Some(original_parent_turn_id))?;
     assert_eq!(
         (
             child_body["model"].clone(),
@@ -981,7 +986,61 @@ async fn spawned_child_receives_forked_parent_context(
             json!(REQUESTED_REASONING_EFFORT.to_string()),
         )
     );
+    let child_thread_id = ThreadId::from_string(
+        child_body["client_metadata"]["thread_id"]
+            .as_str()
+            .expect("legacy child thread id"),
+    )?;
+    let child_thread = test.thread_manager.get_thread(child_thread_id).await?;
+    tokio::time::timeout(Duration::from_secs(2), async {
+        while !matches!(child_thread.agent_status().await, AgentStatus::Completed(_)) {
+            sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await?;
+    let args = serde_json::to_string(&json!({
+        "target": child_thread_id.to_string(),
+        "message": "legacy child follow-up",
+    }))?;
+    let parent = mount_sse_once_match(
+        &server,
+        |request: &wiremock::Request| body_contains(request, "reuse the legacy child"),
+        sse(vec![
+            ev_response_created("resp-legacy-reuse"),
+            ev_function_call_with_namespace(
+                "legacy-reuse-call",
+                MULTI_AGENT_V1_NAMESPACE,
+                "send_input",
+                &args,
+            ),
+            ev_completed("resp-legacy-reuse"),
+        ]),
+    )
+    .await;
+    let followup = mount_sse_sequence(
+        &server,
+        vec![
+            sse(vec![ev_completed("resp-legacy-child-reuse")]),
+            sse(vec![ev_completed("resp-legacy-reuse-complete")]),
+        ],
+    )
+    .await;
 
+    test.submit_turn("reuse the legacy child").await?;
+    let followup_parent_body = parent.single_request().body_json();
+    let reused_child_body = wait_for_request_with_model(&followup, REQUESTED_MODEL)
+        .await?
+        .body_json();
+    let followup_parent_turn_id = followup_parent_body["client_metadata"]["turn_id"]
+        .as_str()
+        .expect("legacy follow-up parent turn id");
+    assert_ne!(followup_parent_turn_id, original_parent_turn_id);
+    let metadata = &reused_child_body["client_metadata"];
+    assert_eq!(metadata["thread_id"], json!(child_thread_id));
+    assert_parent_turn(&followup_parent_body, /*expected*/ None)?;
+    assert_parent_turn(&reused_child_body, Some(followup_parent_turn_id))?;
+    assert_root_turn(&followup_parent_body, Some(followup_parent_turn_id))?;
+    assert_root_turn(&reused_child_body, Some(followup_parent_turn_id))?;
     Ok(())
 }
 
@@ -989,10 +1048,14 @@ async fn spawned_child_receives_forked_parent_context(
 enum FullHistoryV2ModelSelection {
     ConfiguredDefault,
     ExplicitOverride,
+    WorldStateIdentity,
+    CurrentTimeReminders,
 }
 
 #[test_case(FullHistoryV2ModelSelection::ConfiguredDefault; "configured default with omitted fork_turns")]
 #[test_case(FullHistoryV2ModelSelection::ExplicitOverride; "explicit override with fork_turns all")]
+#[test_case(FullHistoryV2ModelSelection::WorldStateIdentity; "world state appends context window when agent identity changes")]
+#[test_case(FullHistoryV2ModelSelection::CurrentTimeReminders; "full fork drops inherited current-time reminders")]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn spawned_full_history_v2_child_uses_model_precedence_without_dropping_context(
     selection: FullHistoryV2ModelSelection,
@@ -1011,7 +1074,9 @@ async fn spawned_full_history_v2_child_uses_model_precedence_without_dropping_co
     )
     .await;
     let (spawn_args, expected_model, expected_reasoning_effort) = match selection {
-        FullHistoryV2ModelSelection::ConfiguredDefault => (
+        FullHistoryV2ModelSelection::ConfiguredDefault
+        | FullHistoryV2ModelSelection::WorldStateIdentity
+        | FullHistoryV2ModelSelection::CurrentTimeReminders => (
             json!({
                 "message": CHILD_PROMPT,
                 "task_name": "worker",
@@ -1069,7 +1134,7 @@ async fn spawned_full_history_v2_child_uses_model_precedence_without_dropping_co
         ]),
     )
     .await;
-    let mut builder = test_codex().with_config(|config| {
+    let mut builder = test_codex().with_config(move |config| {
         config
             .features
             .enable(Feature::Collab)
@@ -1078,21 +1143,173 @@ async fn spawned_full_history_v2_child_uses_model_precedence_without_dropping_co
             .features
             .enable(Feature::MultiAgentV2)
             .expect("test config should allow feature update");
+        let model_catalog = config.model_catalog.get_or_insert_with(|| {
+            bundled_models_response().expect("bundled models.json should parse")
+        });
+        for model in [INHERITED_MODEL, V2_DEFAULT_MODEL, V2_REQUESTED_MODEL] {
+            let model_info = model_catalog
+                .models
+                .iter_mut()
+                .find(|model_info| model_info.slug == model)
+                .unwrap_or_else(|| panic!("{model} should exist in bundled models.json"));
+            let multi_agent = model_info
+                .model_messages
+                .as_mut()
+                .expect("bundled model should include model messages")
+                .multi_agent
+                .get_or_insert_with(MultiAgentMessages::default);
+            multi_agent.role = Some(MultiAgentRoleMessages {
+                root: Some(format!("{model} root role.")),
+                subagent: Some(format!("{model} subagent role.")),
+            });
+        }
+        if matches!(selection, FullHistoryV2ModelSelection::WorldStateIdentity) {
+            config
+                .features
+                .enable(Feature::TokenBudget)
+                .expect("test config should allow feature update");
+            config.model_context_window = Some(128_000);
+        }
+        if matches!(selection, FullHistoryV2ModelSelection::CurrentTimeReminders) {
+            config
+                .features
+                .enable(Feature::CurrentTimeReminder)
+                .expect("test config should allow feature update");
+            config.current_time_reminder = Some(CurrentTimeReminderConfig {
+                reminder_interval_seconds: 0,
+                ..CurrentTimeReminderConfig::default()
+            });
+        }
         config.model = Some(INHERITED_MODEL.to_string());
         config.model_reasoning_effort = Some(INHERITED_REASONING_EFFORT);
         config.agent_default_subagent_model = Some(V2_DEFAULT_MODEL.to_string());
         config.agent_default_subagent_reasoning_effort = Some(V2_DEFAULT_REASONING_EFFORT);
     });
+    if matches!(selection, FullHistoryV2ModelSelection::WorldStateIdentity) {
+        builder = builder.with_history_mode(ThreadHistoryMode::Paginated);
+    }
     let test = builder.build(&server).await?;
+    if matches!(selection, FullHistoryV2ModelSelection::WorldStateIdentity) {
+        test.codex.submit(Op::Compact).await?;
+        wait_for_event(&test.codex, |event| {
+            matches!(event, EventMsg::TurnComplete(_))
+        })
+        .await;
+    }
 
     test.submit_turn(TURN_0_FORK_PROMPT).await?;
     let _ = seed_turn.single_request();
     test.submit_turn(TURN_1_PROMPT).await?;
-    let _ = spawn_turn.single_request();
+    let parent_request = spawn_turn.single_request();
 
     let child_request = wait_for_request_with_model(&child_request_log, expected_model).await?;
     assert!(child_request.body_contains_text(TURN_0_FORK_PROMPT));
+    let child_developer_messages = child_request.message_input_texts("developer");
+    assert_eq!(
+        child_developer_messages
+            .iter()
+            .filter(|message| message.contains(&format!("{expected_model} subagent role.")))
+            .count(),
+        1
+    );
+    assert!(!child_developer_messages.iter().any(|message| {
+        message.contains(&format!("{INHERITED_MODEL} root role."))
+            || message.contains(&format!("{INHERITED_MODEL} subagent role."))
+    }));
+    if matches!(selection, FullHistoryV2ModelSelection::CurrentTimeReminders) {
+        let reminder_count = |request: &ResponsesRequest| {
+            request
+                .message_input_texts("developer")
+                .into_iter()
+                .filter(|text| text.starts_with("<current_time_reminder>"))
+                .count()
+        };
+        assert_eq!(reminder_count(&parent_request), 2);
+        assert_eq!(reminder_count(&child_request), 1);
+    }
     let child_body = child_request.body_json();
+    if matches!(selection, FullHistoryV2ModelSelection::WorldStateIdentity) {
+        let child_thread_id = ThreadId::from_string(
+            child_body["client_metadata"]["thread_id"]
+                .as_str()
+                .expect("child thread id"),
+        )?;
+        let child_thread = test.thread_manager.get_thread(child_thread_id).await?;
+        child_thread.flush_rollout().await?;
+        let child_rollout = codex_rollout::RolloutRecorder::get_rollout_history(
+            &child_thread
+                .rollout_path()
+                .expect("child rollout should exist"),
+        )
+        .await?;
+        let context_window_snapshots = child_rollout
+            .get_rollout_items()
+            .iter()
+            .filter_map(|item| match item {
+                RolloutItem::WorldState(world_state) => {
+                    world_state.state.get("context_window").cloned()
+                }
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(
+            context_window_snapshots,
+            vec![json!("/root"), json!("/root/worker")]
+        );
+        let context_windows = child_request
+            .message_input_texts("developer")
+            .into_iter()
+            .filter(|text| text.starts_with("<context_window>\n"))
+            .collect::<Vec<_>>();
+        let identities = context_windows
+            .iter()
+            .map(|text| text.lines().nth(1).expect("agent identity"))
+            .collect::<Vec<_>>();
+        assert_eq!(
+            identities,
+            ["Agent name: /root", "Agent name: /root/worker"]
+        );
+        let window_ids = context_windows
+            .iter()
+            .map(|text| {
+                text.lines()
+                    .find_map(|line| line.strip_prefix("Current context window id: "))
+                    .expect("context window id")
+            })
+            .collect::<Vec<_>>();
+        assert_ne!(window_ids[0], window_ids[1]);
+        let checkpoint = child_rollout
+            .get_rollout_items()
+            .iter()
+            .find_map(|item| match item {
+                RolloutItem::Compacted(checkpoint) => Some(checkpoint),
+                _ => None,
+            })
+            .expect("inherited compaction checkpoint");
+        assert!(
+            checkpoint
+                .replacement_history
+                .as_ref()
+                .is_some_and(|history| !history.is_empty())
+        );
+        assert_eq!(
+            (
+                checkpoint.window_number,
+                checkpoint.first_window_id.as_deref(),
+                checkpoint.previous_window_id.as_deref(),
+                checkpoint.window_id.as_deref(),
+            ),
+            (Some(0), Some(window_ids[1]), None, Some(window_ids[1]))
+        );
+        assert!(
+            child_request.has_message_with_input_texts("developer", |message| {
+                matches!(
+                    message,
+                    [text] if text.starts_with("<context_window>\nAgent name: /root/worker\n")
+                )
+            })
+        );
+    }
     assert_eq!(
         (
             child_body["model"].clone(),
@@ -1350,8 +1567,15 @@ async fn spawned_multi_agent_v2_child_inherits_parent_developer_context() -> Res
     Ok(())
 }
 
+#[test_case(None, false; "encrypted")]
+#[test_case(None, true; "plaintext")]
+#[test_case(Some("gpt-5.6-luna"), false; "luna encrypted leaf")]
+#[test_case(Some("gpt-5.5"), false; "legacy encrypted leaf")]
 #[tokio::test]
-async fn encrypted_multi_agent_v2_spawn_sends_agent_message_to_child() -> Result<()> {
+async fn multi_agent_v2_spawn_sends_agent_message_to_child(
+    model: Option<&str>,
+    plaintext: bool,
+) -> Result<()> {
     let output: &'static Mutex<Vec<u8>> = Box::leak(Box::new(Mutex::new(Vec::new())));
     let subscriber = tracing_subscriber::fmt()
         .with_ansi(false)
@@ -1361,22 +1585,37 @@ async fn encrypted_multi_agent_v2_spawn_sends_agent_message_to_child() -> Result
     let _guard = tracing::subscriber::set_default(subscriber);
 
     let server = start_mock_server().await;
-    let encrypted_message = "opaque-encrypted-message";
-    let spawn_args = serde_json::to_string(&json!({
-        "message": encrypted_message,
+    let message = if plaintext {
+        "plaintext delegated task"
+    } else {
+        "opaque-encrypted-message"
+    };
+    let mut spawn_args = json!({
+        "message": message,
         "task_name": "worker",
-    }))?;
+    });
+    if let Some(model) = model {
+        spawn_args["model"] = json!(model);
+        if model == "gpt-5.5" {
+            spawn_args["fork_turns"] = json!("none");
+        }
+    }
+    let spawn_args = serde_json::to_string(&spawn_args)?;
+    let mut spawn_event = ev_function_call_with_namespace(
+        SPAWN_CALL_ID,
+        MULTI_AGENT_V2_NAMESPACE,
+        "spawn_agent",
+        &spawn_args,
+    );
+    if plaintext {
+        spawn_event["item"]["encrypted_function_args"] = json!([]);
+    }
     mount_sse_once_match(
         &server,
         |req: &wiremock::Request| body_contains(req, TURN_1_PROMPT),
         sse(vec![
             ev_response_created("resp-parent-1"),
-            ev_function_call_with_namespace(
-                SPAWN_CALL_ID,
-                MULTI_AGENT_V2_NAMESPACE,
-                "spawn_agent",
-                &spawn_args,
-            ),
+            spawn_event,
             ev_completed("resp-parent-1"),
         ]),
     )
@@ -1390,7 +1629,7 @@ async fn encrypted_multi_agent_v2_spawn_sends_agent_message_to_child() -> Result
         ]),
     )
     .await;
-    mount_sse_once_match(
+    let parent_request_log = mount_sse_once_match(
         &server,
         |req: &wiremock::Request| {
             body_contains(req, SPAWN_CALL_ID) && !request_has_input_type(req, "agent_message")
@@ -1403,7 +1642,12 @@ async fn encrypted_multi_agent_v2_spawn_sends_agent_message_to_child() -> Result
     )
     .await;
 
-    let mut builder = test_codex().with_model("koffing").with_config(|config| {
+    let parent_model = if model.is_some() {
+        "gpt-5.6-sol"
+    } else {
+        "koffing"
+    };
+    let mut builder = test_codex().with_model(parent_model).with_config(|config| {
         config
             .features
             .enable(Feature::Collab)
@@ -1434,24 +1678,57 @@ async fn encrypted_multi_agent_v2_spawn_sends_agent_message_to_child() -> Result
         }
         sleep(Duration::from_millis(10)).await;
     };
+    let content = if plaintext {
+        vec![json!({
+            "type": "input_text",
+            "text": format!(
+                "Message Type: NEW_TASK\nTask name: /root/worker\nSender: /root\nPayload:\n{message}"
+            ),
+        })]
+    } else {
+        vec![
+            json!({
+                "type": "input_text",
+                "text": "Message Type: NEW_TASK\nTask name: /root/worker\nSender: /root\nPayload:\n",
+            }),
+            json!({
+                "type": "encrypted_content",
+                "encrypted_content": message,
+            }),
+        ]
+    };
     assert_eq!(
-        strip_metadata_from_json(Value::Array(child_request.inputs_of_type("agent_message"))),
+        strip_response_item_ids_from_json(strip_metadata_from_json(Value::Array(
+            child_request.inputs_of_type("agent_message"),
+        ))),
         Value::Array(vec![json!({
             "type": "agent_message",
             "author": "/root",
             "recipient": "/root/worker",
-            "content": [
-                {
-                    "type": "input_text",
-                    "text": "Message Type: NEW_TASK\nTask name: /root/worker\nSender: /root\nPayload:\n",
-                },
-                {
-                    "type": "encrypted_content",
-                    "encrypted_content": encrypted_message,
-                },
-            ],
+            "content": content,
         })])
     );
+    if let Some(model) = model {
+        assert_eq!(child_request.body_json()["model"], json!(model));
+        assert!(
+            !child_request
+                .body_json()
+                .to_string()
+                .contains("\"name\":\"collaboration\""),
+            "leaf workers must not receive collaboration tools",
+        );
+    }
+    if plaintext {
+        assert!(
+            parent_request_log.requests().into_iter().any(|request| {
+                request.input().iter().any(|item| {
+                    item["call_id"].as_str() == Some(SPAWN_CALL_ID)
+                        && item["encrypted_function_args"] == json!([])
+                })
+            }),
+            "plaintext function-call metadata should survive replay"
+        );
+    }
 
     let child_thread_id = test
         .thread_manager
@@ -1478,7 +1755,8 @@ async fn encrypted_multi_agent_v2_spawn_sends_agent_message_to_child() -> Result
         .expect("spawn send event");
     assert!(send.contains(&format!("sender_thread_id={root_thread_id}")));
     assert!(send.contains(&format!("receiver_thread_id={child_thread_id}")));
-    assert!(send.contains(&format!("content=\"{encrypted_message}\"")));
+    let logged_message = if plaintext { "[plaintext]" } else { message };
+    assert!(send.contains(&format!("content=\"{logged_message}\"")));
 
     let communication_id = log_field(send, "communication_id").expect("communication ID");
     logs.lines()
@@ -1623,7 +1901,9 @@ async fn plaintext_multi_agent_v2_completion_sends_agent_message(
         .pop()
         .expect("agent message request");
     assert_eq!(
-        strip_metadata_from_json(Value::Array(request.inputs_of_type("agent_message"))),
+        strip_response_item_ids_from_json(strip_metadata_from_json(Value::Array(
+            request.inputs_of_type("agent_message"),
+        ))),
         Value::Array(vec![json!({
             "type": "agent_message",
             "author": "/root/worker",
