@@ -1,12 +1,12 @@
 ---
 source: tui/src/keymap_setup.rs
-assertion_line: 1213
+assertion_line: 1148
 expression: "render_picker(params, 78)"
 ---
 
   Keymap
   All configurable shortcuts.
-  116 actions, 0 customized, 3 unbound.
+  117 actions, 0 customized, 3 unbound.
 
   [All]  Common  Customized (0)  Unbound (3)  App  Composer  Editor  Vim
   Navigation  Approval  Debug
@@ -19,6 +19,6 @@ expression: "render_picker(params, 78)"
   Global         Clear Terminal             ctrl-l
   Global       - Toggle Vim Mode            unbound
   Global         Toggle Raw Output          alt-r
-  Chat           Interrupt Turn             esc
+  Global         Toggle Side Conversation   ctrl-/
 
   left/right group · enter edit shortcut · * custom · - unbound · esc close

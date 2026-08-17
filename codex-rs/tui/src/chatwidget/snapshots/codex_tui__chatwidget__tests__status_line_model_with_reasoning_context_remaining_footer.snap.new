@@ -1,6 +1,6 @@
 ---
 source: tui/src/chatwidget/tests/status_and_layout.rs
-assertion_line: 3325
+assertion_line: 4054
 expression: normalized_backend_snapshot(terminal.backend())
 ---
 "                                                                                "

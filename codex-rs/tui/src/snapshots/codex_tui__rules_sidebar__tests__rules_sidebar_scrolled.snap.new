@@ -8,6 +8,6 @@ expression: "render_panel(&mut state, 40, 8)"
  wrapping remains reviewable.         │
                                       │
  2. Failure handling                  ┃
- Keep the last successful rules       │
+ Keep the last successful rules       ┃
  visible when refresh fails.          │
  Ctrl+Alt+Up/Down scroll  Ctrl+T close

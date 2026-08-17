@@ -1,0 +1,6 @@
+---
+source: tui/src/chatwidget/tests/exec_flow.rs
+assertion_line: 1375
+expression: active_blob(&chat)
+---
+• Ran 2 commands · ctrl + e to view transcript

@@ -1,6 +1,6 @@
 ---
 source: tui/src/bottom_pane/request_user_input/mod.rs
-assertion_line: 3274
+assertion_line: 3420
 expression: "render_snapshot(&overlay, area)"
 ---
                                                                                                                         

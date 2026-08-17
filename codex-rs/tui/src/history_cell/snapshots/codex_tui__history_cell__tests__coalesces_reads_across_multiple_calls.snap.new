@@ -1,0 +1,6 @@
+---
+source: tui/src/history_cell/tests.rs
+assertion_line: 1937
+expression: rendered
+---
+• Ran 3 commands · ctrl + e to view transcript

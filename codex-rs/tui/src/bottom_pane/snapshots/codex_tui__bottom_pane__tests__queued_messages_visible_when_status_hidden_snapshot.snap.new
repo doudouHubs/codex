@@ -1,6 +1,6 @@
 ---
 source: tui/src/bottom_pane/mod.rs
-assertion_line: 2601
+assertion_line: 2697
 expression: "render_snapshot(&pane, area)"
 ---
 • Queued follow-up inputs                       

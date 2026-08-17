@@ -1,6 +1,6 @@
 ---
 source: tui/src/chatwidget/tests/exec_flow.rs
-assertion_line: 898
+assertion_line: 1308
 expression: normalized_backend_snapshot(terminal.backend())
 ---
 "                                                                                "

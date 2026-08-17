@@ -1,6 +1,6 @@
 ---
 source: tui/src/chatwidget/tests/slash_commands.rs
-assertion_line: 2898
+assertion_line: 3092
 expression: normalize_snapshot_paths(term.backend().vt100().screen().contents())
 ---
 

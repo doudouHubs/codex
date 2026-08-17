@@ -1,6 +1,6 @@
 ---
 source: tui/src/chatwidget/tests/mcp_startup.rs
-assertion_line: 249
+assertion_line: 403
 expression: normalize_snapshot_paths(term.backend().vt100().screen().contents())
 ---
 

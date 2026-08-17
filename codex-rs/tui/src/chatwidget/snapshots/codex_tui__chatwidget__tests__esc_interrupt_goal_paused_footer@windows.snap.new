@@ -1,6 +1,6 @@
 ---
 source: tui/src/chatwidget/tests/status_and_layout.rs
-assertion_line: 2035
+assertion_line: 2083
 expression: snapshot
 ---
 "                                                                                "

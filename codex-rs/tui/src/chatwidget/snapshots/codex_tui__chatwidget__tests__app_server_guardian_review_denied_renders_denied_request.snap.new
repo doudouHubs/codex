@@ -1,6 +1,6 @@
 ---
 source: tui/src/chatwidget/tests/guardian.rs
-assertion_line: 432
+assertion_line: 473
 expression: normalize_snapshot_paths(term.backend().vt100().screen().contents())
 ---
 

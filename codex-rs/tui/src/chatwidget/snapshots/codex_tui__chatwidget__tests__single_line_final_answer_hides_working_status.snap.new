@@ -1,6 +1,6 @@
 ---
 source: tui/src/chatwidget/tests/status_and_layout.rs
-assertion_line: 1997
+assertion_line: 2045
 expression: normalize_snapshot_paths(terminal.backend().vt100().screen().contents())
 ---
 

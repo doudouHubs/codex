@@ -1,0 +1,11 @@
+---
+source: tui/src/history_cell/tests.rs
+assertion_line: 2161
+expression: rendered
+---
+• Ran seq 1 10 1>&2 && false
+  └ 1
+    2
+    … +6 lines (ctrl + e to view transcript)
+    9
+    10
