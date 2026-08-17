@@ -920,7 +920,7 @@ mod tests {
         assert!(
             display
                 .iter()
-                .any(|line| line.contains("ctrl + t to view transcript")),
+                .any(|line| line.contains("ctrl + e to view transcript")),
             "expected truncated context to advertise the transcript: {display:?}"
         );
         assert!(display.iter().all(|line| !line.contains("tail-marker")));
@@ -961,7 +961,7 @@ mod tests {
             assert!(
                 display
                     .iter()
-                    .all(|line| !line.contains("ctrl + t to view transcript")),
+                    .all(|line| !line.contains("ctrl + e to view transcript")),
                 "did not expect a transcript hint for {kind:?}: {display:?}"
             );
         }

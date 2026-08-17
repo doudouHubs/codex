@@ -677,7 +677,7 @@ impl ExecCell {
         .max(1)
     }
 
-    /// Builds an output ellipsis line (`… +N lines (ctrl + t to view transcript)`)
+    /// Builds an output ellipsis line (`… +N lines (ctrl + e to view transcript)`)
     /// with an optional leading prefix so the ellipsis aligns with the output gutter.
     fn output_ellipsis_line_with_prefix(
         omitted: usize,
@@ -879,7 +879,7 @@ mod tests {
         assert!(
             rendered
                 .iter()
-                .any(|line| line.contains("… +6 lines (ctrl + t to view transcript)")),
+                .any(|line| line.contains("… +6 lines (ctrl + e to view transcript)")),
             "expected omitted hint to count hidden lines (not wrapped rows), got: {rendered:?}"
         );
     }
@@ -910,7 +910,7 @@ mod tests {
             vec![
                 "1",
                 "2",
-                "… +3 lines (ctrl + t to view transcript)",
+                "… +3 lines (ctrl + e to view transcript)",
                 "6",
                 "7",
             ]

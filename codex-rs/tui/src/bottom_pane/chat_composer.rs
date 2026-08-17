@@ -277,6 +277,7 @@ use crate::onboarding::mark_underlined_hyperlink;
 use crate::render::Insets;
 use crate::render::RectExt;
 use crate::render::renderable::Renderable;
+use crate::render::renderable::rect_contains_point;
 use crate::slash_command::SlashCommand;
 use crate::style::user_message_style;
 use codex_protocol::ThreadId;
@@ -4765,6 +4766,12 @@ fn find_next_mention_token_range(text: &str, token: &str, from: usize) -> Option
 }
 
 impl Renderable for ChatComposer {
+    fn hit_test(&self, area: Rect, x: u16, y: u16) -> Option<Rect> {
+        // 只有命中 composer 自身的布局区域才允许上层把点击交给光标换算逻辑，避免
+        // FlexRenderable 在没有叶节点声明时直接丢弃鼠标事件。
+        rect_contains_point(area, x, y).then_some(area)
+    }
+
     fn cursor_pos(&self, area: Rect) -> Option<(u16, u16)> {
         self.cursor_pos_with_textarea_right_reserve(area, /*textarea_right_reserve*/ 0)
     }

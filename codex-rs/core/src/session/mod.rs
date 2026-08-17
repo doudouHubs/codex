@@ -3564,13 +3564,12 @@ impl Session {
             developer_sections.push(developer_instructions.to_string());
         }
         let loaded_plugins = if turn_context.is_prompt_optimization() {
-            Vec::new()
+            codex_core_plugins::PluginLoadOutcome::default()
         } else {
-            self
-            .services
-            .plugins_manager
-            .plugins_for_config(&turn_context.config.plugins_config_input())
-            .await;
+            self.services
+                .plugins_manager
+                .plugins_for_config(&turn_context.config.plugins_config_input())
+                .await
         };
         let features = turn_context.config.features.get();
         let recommended_plugin_candidates = if turn_context.is_prompt_optimization() {

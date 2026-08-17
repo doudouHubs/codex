@@ -8,7 +8,9 @@ use super::start_config_write_test_app_server;
 use crate::bottom_pane::SelectionItem;
 use crate::bottom_pane::SelectionViewParams;
 use crate::chatwidget::tests::helpers::render_bottom_popup;
+use crate::key_hint::KeyBindingListExt;
 use crate::keymap::KeymapContext;
+use crate::rules_sidebar::RulesSidebarState;
 use crate::test_support::test_path_display;
 use crate::tui::Tui;
 use codex_app_server_protocol::ToolRequestUserInputOption;
@@ -17,6 +19,7 @@ use codex_app_server_protocol::ToolRequestUserInputQuestion;
 use codex_config::types::KeybindingSpec;
 use codex_config::types::KeybindingsSpec;
 use codex_config::types::TuiKeymap;
+use codex_protocol::ThreadId;
 use crossterm::event::KeyCode;
 use crossterm::event::KeyEvent;
 use crossterm::event::KeyModifiers;
@@ -80,6 +83,35 @@ async fn completed_global_chord_reuses_the_existing_action_handler() -> Result<(
     press(&mut app, &mut tui, &mut app_server, ctrl('t')).await?;
     assert!(!app.key_chord_matcher.is_pending());
     assert!(app.overlay.is_some());
+    Ok(())
+}
+
+#[tokio::test]
+async fn physical_chord_routes_rules_sidebar_action() -> Result<()> {
+    let mut app = make_test_app().await;
+    let mut config = TuiKeymap::default();
+    config.rules_sidebar.scroll_up = Some(KeybindingsSpec::One(KeybindingSpec(
+        "ctrl-x ctrl-u".to_string(),
+    )));
+    let runtime =
+        RuntimeKeymap::from_config(&config).map_err(|error| color_eyre::eyre::eyre!(error))?;
+    app.chat_widget.apply_keymap_update(config, &runtime);
+    app.keymap = runtime;
+    app.rules_sidebar = Some(RulesSidebarState::new(
+        ThreadId::new(),
+        app.config.cwd.to_path_buf(),
+        Vec::new(),
+        app.keymap.pager.clone(),
+    ));
+    let mut tui = crate::tui::test_support::make_test_tui()?;
+
+    // 侧栏与 composer 同时活跃；缺少 RulesSidebar context 时首击会直接透传，
+    // 这条断言能确保 chord 路由真正进入侧栏 action inventory。
+    assert!(app.route_key_chord_event(&mut tui, ctrl('x')).is_none());
+    let completed = app
+        .route_key_chord_event(&mut tui, ctrl('u'))
+        .expect("rules sidebar chord should produce a dispatch event");
+    assert!(app.keymap.rules_sidebar.scroll_up.is_pressed(completed));
     Ok(())
 }
 

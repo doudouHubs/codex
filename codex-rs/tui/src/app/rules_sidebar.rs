@@ -206,7 +206,7 @@ impl App {
             TuiEvent::Paste(pasted) => {
                 self.chat_widget.handle_paste(pasted.replace('\r', "\n"));
             }
-            TuiEvent::Draw | TuiEvent::Resize(_) => {
+            TuiEvent::Draw | TuiEvent::Resume | TuiEvent::Resize(_) => {
                 self.refresh_rules_sidebar_context_if_needed();
                 self.chat_widget.maybe_post_pending_notification(tui);
                 if self

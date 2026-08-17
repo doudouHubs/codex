@@ -526,7 +526,7 @@ See the Codex keymap documentation for supported actions and examples."
         if Self::should_handle_active_thread_events(
             wait_for_initial_session_configured,
             app.active_thread_rx.is_some(),
-        ) && let Err(err) = app.drain_active_thread_events(tui).await
+        ) && let Err(err) = app.drain_active_thread_events(tui, &mut app_server).await
         {
             return shutdown_on_startup_error(app_server, err).await;
         }
@@ -703,7 +703,7 @@ See the Codex keymap documentation for supported actions and examples."
                 ) {
                     waiting_for_initial_session_configured = false;
                     let had_active_view = app.chat_widget.has_active_view();
-                    if let Err(err) = app.drain_active_thread_events(tui).await {
+                    if let Err(err) = app.drain_active_thread_events(tui, &mut app_server).await {
                         break Err(err);
                     }
                     if !had_active_view

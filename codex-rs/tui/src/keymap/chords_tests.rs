@@ -65,6 +65,8 @@ fn rejects_ctrl_c_inside_approval_chords() {
 fn resolves_chords_for_actions_in_different_contexts() {
     let mut config = TuiKeymap::default();
     config.global.open_transcript = Some(bindings(&["ctrl-t", "ctrl-x ctrl-t"]));
+    // 该 fixture 复用 Ctrl-T 验证 transcript chord，显式解绑规则侧栏默认键以隔离被测冲突。
+    config.global.toggle_rules_sidebar = Some(KeybindingsSpec::Many(Vec::new()));
     config.composer.submit = Some(binding("ctrl-x enter"));
     config.list.jump_top = Some(binding("ctrl-x home"));
 
@@ -120,6 +122,8 @@ fn allows_plain_prefixes_in_vim_and_repeated_chords_in_all_contexts() {
     config.vim_normal.move_line_start = Some(binding("g g"));
     config.vim_operator.motion_line_start = Some(binding("g g"));
     config.global.open_transcript = Some(binding("ctrl-t ctrl-t"));
+    // 该 fixture 专门验证重复 chord，不能同时继承 Ctrl-T 的规则侧栏默认绑定。
+    config.global.toggle_rules_sidebar = Some(KeybindingsSpec::Many(Vec::new()));
 
     RuntimeKeymap::from_config(&config)
         .expect("Vim owns printable prefixes and all contexts support repeated chords");
@@ -310,6 +314,8 @@ fn physical_dispatch_tokens_do_not_clear_pending_chords() {
 fn matching_chords_dispatches_the_active_context_action() {
     let mut config = TuiKeymap::default();
     config.global.open_transcript = Some(binding("ctrl-t ctrl-t"));
+    // 该 fixture 专门验证重复 chord，显式解绑同键的规则侧栏动作。
+    config.global.toggle_rules_sidebar = Some(KeybindingsSpec::Many(Vec::new()));
     config.editor.move_line_start = Some(binding("ctrl-x home"));
     config.list.jump_top = Some(binding("ctrl-x home"));
     let runtime = RuntimeKeymap::from_config(&config).expect("non-overlapping chord contexts");

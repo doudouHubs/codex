@@ -10,13 +10,13 @@ async fn compact_command_activity_groups_successes_and_preserves_full_transcript
     end_exec(&mut chat, first, "first\n", "", /*exit_code*/ 0);
 
     let second = begin_exec(&mut chat, "call-second", "printf second");
-    insta::assert_snapshot!(active_blob(&chat), @r"• Ran 1 command · ctrl + t to view transcript
+    insta::assert_snapshot!(active_blob(&chat), @r"• Ran 1 command · ctrl + e to view transcript
 • Running printf second
 ");
     end_exec(&mut chat, second, "second\n", "", /*exit_code*/ 0);
 
     assert!(drain_insert_history(&mut rx).is_empty());
-    insta::assert_snapshot!(active_blob(&chat), @r"• Ran 2 commands · ctrl + t to view transcript
+    insta::assert_snapshot!(active_blob(&chat), @r"• Ran 2 commands · ctrl + e to view transcript
 ");
 
     let transcript = chat
@@ -31,7 +31,7 @@ async fn compact_command_activity_groups_successes_and_preserves_full_transcript
     assert_eq!(cells.len(), 2);
     assert_eq!(
         lines_to_single_string(&cells[0]),
-        "• Ran 2 commands · ctrl + t to view transcript\n"
+        "• Ran 2 commands · ctrl + e to view transcript\n"
     );
 }
 
@@ -70,7 +70,7 @@ async fn compact_command_activity_groups_unified_exec_startup_commands() {
     end_exec(&mut chat, second, "second\n", "", /*exit_code*/ 0);
 
     assert!(drain_insert_history(&mut rx).is_empty());
-    insta::assert_snapshot!(active_blob(&chat), @r"• Ran 2 commands · ctrl + t to view transcript
+    insta::assert_snapshot!(active_blob(&chat), @r"• Ran 2 commands · ctrl + e to view transcript
 ");
 }
 
@@ -191,7 +191,7 @@ async fn compact_command_activity_keeps_failures_and_manual_shell_commands_visib
     let cells = drain_insert_history(&mut rx);
     assert_eq!(cells.len(), 1);
     let failed_history = lines_to_single_string(&cells[0]);
-    insta::assert_snapshot!(failed_history, @r"• Ran 1 command · ctrl + t to view transcript
+    insta::assert_snapshot!(failed_history, @r"• Ran 1 command · ctrl + e to view transcript
 • Ran printf broken
   └ broken
 ");
@@ -340,7 +340,7 @@ async fn compact_command_activity_groups_replayed_successes_without_hiding_decli
     assert_eq!(cells.len(), 3);
     assert_eq!(
         lines_to_single_string(&cells[0].display_lines(/*width*/ 80)),
-        "• Ran 2 commands · ctrl + t to view transcript\n"
+        "• Ran 2 commands · ctrl + e to view transcript\n"
     );
     let transcript = lines_to_single_string(&cells[0].transcript_lines(/*width*/ 80));
     insta::assert_snapshot!(transcript, @r"$ printf first
@@ -375,7 +375,7 @@ async fn compact_command_activity_bounds_completed_groups_without_flushing_activ
     assert_eq!(cells.len(), 1);
     assert_eq!(
         lines_to_single_string(&cells[0]),
-        "• Ran 32 commands · ctrl + t to view transcript\n"
+        "• Ran 32 commands · ctrl + e to view transcript\n"
     );
     assert!(chat.transcript.active_cell.is_none());
 
@@ -873,7 +873,7 @@ async fn exec_end_without_begin_groups_completed_agent_and_unified_commands() {
     end_exec(&mut chat, orphan, "after\n", "", /*exit_code*/ 0);
 
     assert!(drain_insert_history(&mut rx).is_empty());
-    insta::assert_snapshot!(active_blob(&chat), @r"• Ran 2 commands · ctrl + t to view transcript
+    insta::assert_snapshot!(active_blob(&chat), @r"• Ran 2 commands · ctrl + e to view transcript
 ");
 }
 

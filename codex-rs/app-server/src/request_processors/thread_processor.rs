@@ -1372,9 +1372,10 @@ impl ThreadRequestProcessor {
             dynamic_tools,
             metrics_service_name: service_name,
             parent_trace: request_trace,
-            environments,
+            environments: Some(environments),
             thread_extension_init,
             client_mcp_extensions,
+            reserved_thread_id: None,
         };
         let new_thread = async {
             if matches!(thread_mode, Some(ThreadMode::PromptOptimization)) {
@@ -1395,10 +1396,10 @@ impl ThreadRequestProcessor {
             thread_start.dynamic_tool_count = dynamic_tool_count,
         ))
         .await
-        .map_err(|err| match err {
-            CodexErr::InvalidRequest(message) => invalid_request(message),
-            CodexErr::UnsupportedOperation(message) => method_not_found(message),
-            err => internal_error(format!("error creating thread: {err}")),
+        .map_err(|err| match err.details() {
+            CodexErrorDetails::InvalidRequest(message) => invalid_request(message.clone()),
+            CodexErrorDetails::UnsupportedOperation(message) => method_not_found(message.clone()),
+            _ => internal_error(format!("error creating thread: {err}")),
         })?;
         let NewThread {
             thread_id,

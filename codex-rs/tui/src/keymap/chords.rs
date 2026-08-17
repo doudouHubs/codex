@@ -67,6 +67,7 @@ const fn context_bit(context: KeymapContext) -> u16 {
         KeymapContext::Pager => 7,
         KeymapContext::List => 8,
         KeymapContext::Approval => 9,
+        KeymapContext::RulesSidebar => 10,
     }
 }
 
@@ -458,7 +459,8 @@ Choose a different chord and retry.",
         | KeymapContext::Editor
         | KeymapContext::VimNormal
         | KeymapContext::VimOperator
-        | KeymapContext::VimTextObject => MAIN_RESERVED_BINDINGS,
+        | KeymapContext::VimTextObject
+        | KeymapContext::RulesSidebar => MAIN_RESERVED_BINDINGS,
         KeymapContext::List => LIST_RESERVED_BINDINGS,
         KeymapContext::Approval => &LIST_RESERVED_BINDINGS[..1],
     };

@@ -216,10 +216,8 @@ impl App {
 
     /// Open transcript overlay (enters alternate screen and shows full transcript).
     pub(crate) fn open_transcript_overlay(&mut self, tui: &mut tui::Tui) {
-        let mut overlay = Overlay::new_transcript(
-            self.transcript_cells.clone(),
-            self.keymap.pager.clone(),
-        );
+        let mut overlay =
+            Overlay::new_transcript(self.transcript_cells.clone(), self.keymap.pager.clone());
         if self.scrollback_has_older_history
             && let Overlay::Transcript(overlay) = &mut overlay
         {

@@ -1168,6 +1168,9 @@ mod tests {
             &["ctrl-t".to_string(), "ctrl-x ctrl-t".to_string()],
         )
         .expect("global chord binding");
+        // 该 fixture 复用 Ctrl-T 展示 transcript chord，显式解绑规则侧栏默认键。
+        let keymap = keymap_with_bindings(&keymap, "global", "toggle_rules_sidebar", &[])
+            .expect("unbind rules sidebar binding");
         let runtime = RuntimeKeymap::from_config(&keymap).expect("runtime keymap");
         let params = build_keymap_picker_params(&runtime, &keymap);
 
@@ -1186,6 +1189,9 @@ mod tests {
             &["ctrl-t".to_string(), "ctrl-x ctrl-t".to_string()],
         )
         .expect("global chord bindings");
+        // 该 fixture 验证 transcript 的替代绑定顺序，不继承 Ctrl-T 的规则侧栏默认键。
+        let keymap = keymap_with_bindings(&keymap, "global", "toggle_rules_sidebar", &[])
+            .expect("unbind rules sidebar binding");
         let runtime = RuntimeKeymap::from_config(&keymap).expect("runtime keymap");
 
         assert_eq!(

@@ -21,6 +21,7 @@ pub(crate) enum KeymapContext {
     VimOperator,
     VimTextObject,
     Pager,
+    RulesSidebar,
     List,
     Approval,
 }
@@ -36,6 +37,7 @@ impl KeymapContext {
             Self::VimOperator => "vim_operator",
             Self::VimTextObject => "vim_text_object",
             Self::Pager => "pager",
+            Self::RulesSidebar => "rules_sidebar",
             Self::List => "list",
             Self::Approval => "approval",
         }
@@ -65,7 +67,11 @@ impl KeymapContext {
     }
 
     const fn is_shared_main(self) -> bool {
-        matches!(self, Self::Global | Self::Chat | Self::Composer)
+        // 侧栏打开时仍与主输入面同时接收按键，必须参与同一套冲突判断。
+        matches!(
+            self,
+            Self::Global | Self::Chat | Self::Composer | Self::RulesSidebar
+        )
     }
 
     const fn is_main_editor(self) -> bool {
@@ -222,6 +228,7 @@ macro_rules! define_runtime_action_bindings {
 define_runtime_action_bindings! {
     "global" => Global, app, global [
         open_transcript,
+        toggle_rules_sidebar,
         open_external_editor,
         copy,
         clear_terminal,
@@ -327,6 +334,15 @@ define_runtime_action_bindings! {
         jump_bottom,
         close,
         close_transcript,
+    ],
+    "rules_sidebar" => RulesSidebar, rules_sidebar, rules_sidebar [
+        transcript_jump_top,
+        transcript_jump_bottom,
+        scroll_up,
+        scroll_down,
+        page_up,
+        page_down,
+        close,
     ],
     "list" => List, list, list [
         move_up,

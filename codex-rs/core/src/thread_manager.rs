@@ -949,7 +949,7 @@ impl ThreadManager {
 
     async fn start_thread_with_options_and_modes(
         &self,
-        options: StartThreadOptions,
+        mut options: StartThreadOptions,
         forked_from_thread_id: Option<ThreadId>,
         mcp_runtime_mode: McpRuntimeMode,
         thread_runtime_mode: ThreadRuntimeMode,

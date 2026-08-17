@@ -195,8 +195,8 @@ pub(crate) enum CancellationEvent {
 use crate::bottom_pane::prompt_args::parse_slash_name;
 pub(crate) use chat_composer::ChatComposer;
 pub(crate) use chat_composer::ChatComposerConfig;
-pub(crate) use chat_composer::ComposerPromptMode;
 pub(crate) use chat_composer::ComposerDraftSnapshot;
+pub(crate) use chat_composer::ComposerPromptMode;
 pub(crate) use chat_composer::InputResult;
 pub(crate) use chat_composer::QueuedInputAction;
 pub(crate) use chat_composer_history::HistoryEntry;
@@ -1964,6 +1964,10 @@ struct ChatComposerRightReserveRenderable<'a> {
 }
 
 impl Renderable for ChatComposerRightReserveRenderable<'_> {
+    fn hit_test(&self, area: Rect, x: u16, y: u16) -> Option<Rect> {
+        self.composer.hit_test(area, x, y)
+    }
+
     fn render(&self, area: Rect, buf: &mut Buffer) {
         self.composer.render_with_mask_and_textarea_right_reserve(
             area,

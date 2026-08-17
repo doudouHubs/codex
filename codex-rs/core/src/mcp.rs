@@ -19,6 +19,7 @@ use codex_mcp::CODEX_APPS_MCP_SERVER_NAME;
 use codex_mcp::EffectiveMcpServer;
 use codex_mcp::McpConfig;
 use codex_mcp::McpPluginAttribution;
+use codex_mcp::McpProtocolMode;
 use codex_mcp::McpServerRegistration;
 use codex_mcp::McpToolCatalogCache;
 use codex_mcp::ResolvedMcpCatalog;
@@ -28,8 +29,8 @@ use codex_mcp::configured_mcp_servers;
 use codex_mcp::effective_mcp_servers;
 use codex_plugin::AppConnectorId;
 use codex_protocol::capabilities::SelectedCapabilityRoot;
-use rmcp::model::ElicitationCapability;
 use codex_protocol::protocol::SessionSource;
+use rmcp::model::ElicitationCapability;
 
 const LEGACY_CODEX_APPS_REGISTRATION_ID: &str = "legacy_codex_apps";
 
@@ -55,11 +56,17 @@ pub(crate) fn empty_mcp_runtime_projection(config: &Config) -> McpRuntimeProject
                 .features
                 .enabled(Feature::SkillMcpDependencyInstall),
             approval_policy: config.permissions.approval_policy.clone(),
+            permission_profile: config.permissions.permission_profile().clone(),
+            config_layer_stack: config.config_layer_stack.clone(),
+            approvals_reviewer: config.approvals_reviewer,
+            environment_cwds: HashMap::new(),
             codex_linux_sandbox_exe: config.codex_linux_sandbox_exe.clone(),
             use_legacy_landlock: config.features.use_legacy_landlock(),
             // Apps MCP 是兼容内置 server，禁用线程不能通过它间接获得 connector 能力。
             apps_enabled: false,
             prefix_mcp_tool_names: config.prefix_mcp_tool_names(),
+            non_prefixed_mcp_tool_servers: Vec::new(),
+            protocol_mode: McpProtocolMode::Legacy,
             client_elicitation_capability: ElicitationCapability::default(),
             mcp_server_catalog: ResolvedMcpCatalog::default(),
             connector_snapshot: ConnectorSnapshot::default(),

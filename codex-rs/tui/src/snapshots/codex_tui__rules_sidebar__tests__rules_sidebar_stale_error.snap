@@ -1,6 +1,6 @@
 ---
 source: tui/src/rules_sidebar_tests.rs
-assertion_line: 124
+assertion_line: 123
 expression: "render_panel(&mut state, 40, 12)"
 ---
  Rules  2  stale
@@ -14,4 +14,4 @@ expression: "render_panel(&mut state, 40, 12)"
  2. Failure handling                  │
  Keep the last successful rules       │
  visible when refresh fails.          │
- Alt+Up/Down scroll  Ctrl+T close
+ Ctrl+Alt+Up/Down scroll  Ctrl+T close

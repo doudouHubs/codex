@@ -650,9 +650,9 @@ impl AppServerSession {
         let (response, history_support) =
             request_thread_start_with_history_fallback(&request_handle, request_id, params)
                 .await
-            .map_err(|err| {
-                bootstrap_request_error("thread/start failed during TUI bootstrap", err)
-            })?;
+                .map_err(|err| {
+                    bootstrap_request_error("thread/start failed during TUI bootstrap", err)
+                })?;
         if history_support == ThreadHistorySupport::LegacyOnly {
             self.history_support = ThreadHistorySupport::LegacyOnly;
         }

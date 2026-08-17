@@ -984,7 +984,7 @@ async fn underfilled_scrollback_fetches_older_pages_without_opening_the_transcri
     app.handle_key_event(
         &mut tui,
         &mut app_server,
-        KeyEvent::new(KeyCode::Char('t'), KeyModifiers::CONTROL),
+        KeyEvent::new(KeyCode::Char('e'), KeyModifiers::CONTROL),
     )
     .await;
     assert!(app.scrollback_has_older_history);

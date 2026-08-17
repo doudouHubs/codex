@@ -155,12 +155,8 @@ pub(crate) fn build_tool_router(
                 ToolExposure::DirectModelOnly,
             );
         }
-        let model_visible_specs = build_model_visible_specs(
-            turn_context,
-            &registry,
-            &BTreeMap::new(),
-            Vec::new(),
-        );
+        let model_visible_specs =
+            build_model_visible_specs(turn_context, &registry, &BTreeMap::new(), Vec::new());
         return Ok(ToolRouter::from_parts(registry, model_visible_specs));
     }
     let mut registry = ToolRegistry::default();

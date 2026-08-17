@@ -15,6 +15,7 @@ use codex_config::types::KeybindingsSpec;
 use codex_config::types::TuiKeymap;
 use crossterm::event::KeyEvent;
 
+use crate::key_hint::KeyBinding;
 use crate::keymap::RuntimeKeymap;
 
 #[derive(Clone, Copy, Debug)]
@@ -377,6 +378,9 @@ pub(super) fn bindings_for_action<'a>(
         ("global", "toggle_vim_mode") => Some(runtime_keymap.app.toggle_vim_mode.as_slice()),
         ("global", "toggle_fast_mode") => Some(runtime_keymap.app.toggle_fast_mode.as_slice()),
         ("global", "toggle_raw_output") => Some(runtime_keymap.app.toggle_raw_output.as_slice()),
+        ("global", "toggle_side_conversation") => {
+            Some(runtime_keymap.app.toggle_side_conversation.as_slice())
+        }
         ("chat", "interrupt_turn") => Some(runtime_keymap.chat.interrupt_turn.as_slice()),
         ("chat", "decrease_reasoning_effort") => Some(runtime_keymap.chat.decrease_reasoning_effort.as_slice()),
         ("chat", "increase_reasoning_effort") => Some(runtime_keymap.chat.increase_reasoning_effort.as_slice()),

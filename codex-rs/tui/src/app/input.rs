@@ -76,9 +76,15 @@ impl App {
 
         let contexts = self.chat_widget.keymap_contexts();
         if self.chat_widget.no_modal_or_popup_active() {
-            contexts
+            let mut contexts = contexts
                 .with(crate::keymap::KeymapContext::Global)
-                .with(crate::keymap::KeymapContext::Chat)
+                .with(crate::keymap::KeymapContext::Chat);
+            // 侧栏不是 modal：它的专属 chord 与 composer/editor 同时处于活动状态，
+            // 因此必须在路由阶段加入 context，完成后的 dispatch token 才能回到侧栏处理器。
+            if self.rules_sidebar.is_some() {
+                contexts = contexts.with(crate::keymap::KeymapContext::RulesSidebar);
+            }
+            contexts
         } else {
             contexts
         }

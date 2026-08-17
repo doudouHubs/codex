@@ -44,12 +44,12 @@ use tokio::sync::broadcast;
 use tokio_stream::Stream;
 
 pub use self::frame_requester::FrameRequester;
-use self::mouse_capture::MouseCaptureAction;
-use self::mouse_capture::MouseCaptureState;
 use self::input_boundary::TerminalInitializationGuard;
 pub(crate) use self::input_boundary::discard_pending_terminal_input;
 #[cfg(all(test, unix))]
 use self::input_boundary::terminal_input_is_readable;
+use self::mouse_capture::MouseCaptureAction;
+use self::mouse_capture::MouseCaptureState;
 use crate::custom_terminal;
 use crate::custom_terminal::Terminal as CustomTerminal;
 use crate::insert_history::HistoryLineWrapPolicy;
