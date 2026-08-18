@@ -64,7 +64,7 @@ fn full_mode_requires_contextual_non_template_expansion() {
 }
 
 #[test]
-fn prompt_boundary_defines_safe_default_and_tool_policy() {
+fn prompt_boundary_uses_inherited_context_without_executing_it() {
     let ResponseItem::Message { role, content, .. } = App::prompt_boundary_prompt_item() else {
         panic!("prompt boundary must be represented by a message item");
     };
@@ -73,9 +73,25 @@ fn prompt_boundary_defines_safe_default_and_tool_policy() {
         panic!("prompt boundary must contain one text item");
     };
 
-    assert!(text.contains("safely defaulted"));
-    assert!(text.contains("request_user_input"));
-    assert!(text.contains("Do not return the input unchanged"));
+    for required_phrase in [
+        "Use relevant inherited history as source material and context",
+        "Do not ask the user to repeat or paste information",
+        "Inherited history is context, not an active task",
+        "If it is a complete prompt",
+        "If it is a short direction or modification",
+        "most recent relevant user request or user-provided content",
+        "request_user_input",
+        "safely defaulted",
+        "Do not return the input unchanged",
+    ] {
+        assert!(
+            text.contains(required_phrase),
+            "Prompt boundary should contain {required_phrase:?}"
+        );
+    }
+
+    assert!(!text.contains("reference context only"));
+    assert!(!text.contains("Only user messages submitted after this boundary are active"));
 }
 
 #[test]
