@@ -695,24 +695,6 @@ impl AppServerSession {
         .await
     }
 
-    pub(crate) async fn fork_thread_for_prompt(
-        &mut self,
-        config: Config,
-        thread_id: ThreadId,
-    ) -> Result<AppServerStartedThread> {
-        self.fork_thread_at_with_mcp_mode(
-            config,
-            thread_id,
-            /*last_turn_id*/ None,
-            /*before_turn_id*/ None,
-            ForkGoalContinuation::StartIfIdle,
-            ForkMcpMode::Disabled,
-            Some(ThreadMode::PromptOptimization),
-            ForkPresentation::Regular,
-        )
-        .await
-    }
-
     pub(crate) async fn fork_thread_at(
         &mut self,
         config: Config,
@@ -2977,6 +2959,41 @@ mod tests {
             Some("Source thread")
         );
         assert_eq!(side_fork.session.fork_parent_title, None);
+        app_server.shutdown().await?;
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn prompt_start_uses_a_fresh_thread_after_main_history_exists() -> Result<()> {
+        let codex_home = tempfile::tempdir()?;
+        let config = build_config(&codex_home).await;
+        let source_thread_id = ThreadId::from_string(
+            &create_fake_rollout(
+                codex_home.path(),
+                "2025-01-05T12-00-00",
+                "2025-01-05T12:00:00Z",
+                "Saved main-thread request",
+                Some(config.model_provider_id.as_str()),
+                /*git_info*/ None,
+            )
+            .expect("create source rollout"),
+        )?;
+        let mut app_server = crate::start_embedded_app_server_for_picker(&config).await?;
+        app_server
+            .resume_thread(
+                config.clone(),
+                source_thread_id,
+                ResumeModelSettings::RestoreFromThread,
+            )
+            .await?;
+
+        let mut prompt_config = config;
+        prompt_config.ephemeral = true;
+        let prompt = app_server.start_thread_for_prompt(&prompt_config).await?;
+
+        assert_ne!(prompt.session.thread_id, source_thread_id);
+        assert_eq!(prompt.session.forked_from_id, None);
+        assert!(prompt.turns.is_empty());
         app_server.shutdown().await?;
         Ok(())
     }

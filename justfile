@@ -20,7 +20,16 @@ help:
 
 # `codex`
 alias c := codex
+[unix]
 codex *args:
+    # just codex 使用 debug CLI 时，Code Mode host 也必须位于同一 target/debug 目录。
+    HTTP_PROXY='{{ build_proxy }}' HTTPS_PROXY='{{ build_proxy }}' {{ python }} ../scripts/run_cargo_with_codex_v8.py cargo build --bin codex-code-mode-host
+    cargo run --bin codex -- {args}
+
+[windows]
+codex *args:
+    # just codex 使用 debug CLI 时，Code Mode host 也必须位于同一 target/debug 目录。
+    $env:HTTP_PROXY = "{{ build_proxy }}"; $env:HTTPS_PROXY = "{{ build_proxy }}"; {{ python }} ..\scripts\run_cargo_with_codex_v8.py cargo build --bin codex-code-mode-host
     cargo run --bin codex -- {args}
 
 # `codex exec`
@@ -42,14 +51,16 @@ file-search *args:
 code-mode-host *args:
     cargo run --bin codex-code-mode-host -- {args}
 
-# Build a release executable for local use.
+# 构建本地使用的 release 可执行文件，并同时生成 Code Mode host。
 [unix]
 build-i *args:
     CARGO_BUILD_JOBS='{{ build_jobs }}' CARGO_PROFILE_RELEASE_LTO='{{ build_lto }}' HTTP_PROXY='{{ build_proxy }}' HTTPS_PROXY='{{ build_proxy }}' cargo build --release -p codex-cli --bin codex {args}
+    CARGO_BUILD_JOBS='{{ build_jobs }}' HTTP_PROXY='{{ build_proxy }}' HTTPS_PROXY='{{ build_proxy }}' {{ python }} ../scripts/run_cargo_with_codex_v8.py cargo build --release -p codex-code-mode-host --bin codex-code-mode-host {args}
 
 [windows]
 build-i *args:
     $env:CARGO_BUILD_JOBS = "{{ build_jobs }}"; $env:CARGO_PROFILE_RELEASE_LTO = "{{ build_lto }}"; $env:HTTP_PROXY = "{{ build_proxy }}"; $env:HTTPS_PROXY = "{{ build_proxy }}"; cargo build --release -p codex-cli --bin codex {args}
+    $env:CARGO_BUILD_JOBS = "{{ build_jobs }}"; $env:HTTP_PROXY = "{{ build_proxy }}"; $env:HTTPS_PROXY = "{{ build_proxy }}"; {{ python }} ..\scripts\run_cargo_with_codex_v8.py cargo build --release -p codex-code-mode-host --bin codex-code-mode-host {args}
 
 # Remove release artifacts without touching debug artifacts.
 clean:

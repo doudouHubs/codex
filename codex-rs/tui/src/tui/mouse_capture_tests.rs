@@ -112,8 +112,11 @@ fn surface_enable_without_control_keeps_capture_disabled() {
 #[test]
 fn polled_control_state_enables_and_disables_capture() {
     let mut state = MouseCaptureState::default();
+    assert!(!state.is_requested());
     assert!(!state.request_enable());
+    assert!(state.is_requested());
 
+    // Windows 不一定会把独立 Ctrl 事件送进 crossterm，轮询必须覆盖按下到释放的完整周期。
     assert_eq!(
         state.sync_control_key_mask(LEFT_CONTROL),
         MouseCaptureAction::Enable

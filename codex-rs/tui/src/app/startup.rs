@@ -550,6 +550,8 @@ See the Codex keymap documentation for supported actions and examples."
         if let Err(err) = render_startup_frame(&mut app, tui) {
             return shutdown_on_startup_error(app_server, err).await;
         }
+        // 主聊天区需要登记鼠标捕获请求；物理捕获仍只在 Ctrl 按住期间开启，保留终端原生划选。
+        tui.enable_mouse_capture()?;
         let tui_events = tui.event_stream();
         tokio::pin!(tui_events);
         tracing::info!(
@@ -603,6 +605,8 @@ See the Codex keymap documentation for supported actions and examples."
         let exit_reason_result = if let Some(exit_reason) = pre_loop_exit_reason {
             Ok(exit_reason)
         } else {
+            let mut mouse_capture_poll = tokio::time::interval(Duration::from_millis(16));
+
             loop {
                 let initial_session_header_pending = waiting_for_initial_session_header
                     && app.primary_session_configured.is_some()
@@ -694,6 +698,11 @@ See the Codex keymap documentation for supported actions and examples."
                                 tracing::warn!("app-server event stream closed");
                             }
                         }
+                        AppRunControl::Continue
+                    }
+                    _ = mouse_capture_poll.tick(), if cfg!(windows) => {
+                        #[cfg(windows)]
+                        tui.sync_mouse_capture_from_os();
                         AppRunControl::Continue
                     }
                 };

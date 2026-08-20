@@ -225,6 +225,7 @@ mod pets;
 mod platform_actions;
 mod plugin_mentions;
 mod prompt;
+mod prompt_context;
 mod replay_filter;
 mod resize_reflow;
 mod rules_sidebar;

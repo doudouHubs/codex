@@ -1,6 +1,5 @@
 {
-  "name": "codex-monorepo",
-  "private": true,
+  "name": "codex",
   "description": "Tools for repo-wide maintenance.",
   "scripts": {
     "format": "prettier --check *.json *.md docs/*.md .github/workflows/*.yml **/*.js",
