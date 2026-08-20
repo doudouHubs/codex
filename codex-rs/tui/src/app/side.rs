@@ -402,29 +402,6 @@ impl App {
             .then_some(side_thread_id)
     }
 
-    pub(super) async fn toggle_side_conversation(
-        &mut self,
-        tui: &mut tui::Tui,
-        app_server: &mut AppServerSession,
-    ) -> Result<()> {
-        let Some(active_thread_id) = self.current_displayed_thread_id() else {
-            return Ok(());
-        };
-        let Some((&side_thread_id, state)) = self.side_threads.iter().next() else {
-            return Ok(());
-        };
-        let target_thread_id = if active_thread_id == side_thread_id {
-            state.parent_thread_id
-        } else if active_thread_id == state.parent_thread_id {
-            side_thread_id
-        } else {
-            return Ok(());
-        };
-
-        self.select_agent_thread(tui, app_server, target_thread_id)
-            .await
-    }
-
     pub(super) async fn discard_side_thread(
         &mut self,
         app_server: &mut AppServerSession,

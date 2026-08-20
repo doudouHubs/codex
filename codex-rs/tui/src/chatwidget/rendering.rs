@@ -3,7 +3,6 @@
 use super::transcript::ActiveCellLayoutCache;
 use super::transcript::ActiveCellLayoutCacheKey;
 use super::*;
-use crate::render::renderable::rect_contains_point;
 use std::cell::Cell;
 
 impl ChatWidget {
@@ -105,37 +104,6 @@ impl ChatWidget {
 
     pub(crate) fn note_rendered_width(&self, width: u16) {
         self.last_rendered_width.set(Some(width));
-    }
-}
-
-struct BottomPaneComposerReserveRenderable<'a> {
-    bottom_pane: &'a BottomPane,
-    right_reserve: u16,
-}
-
-impl Renderable for BottomPaneComposerReserveRenderable<'_> {
-    fn render(&self, area: Rect, buf: &mut Buffer) {
-        self.bottom_pane
-            .render_with_composer_right_reserve(area, buf, self.right_reserve);
-    }
-
-    fn desired_height(&self, width: u16) -> u16 {
-        self.bottom_pane
-            .desired_height_with_composer_right_reserve(width, self.right_reserve)
-    }
-
-    fn hit_test(&self, area: Rect, x: u16, y: u16) -> Option<Rect> {
-        rect_contains_point(area, x, y).then_some(area)
-    }
-
-    fn cursor_pos(&self, area: Rect) -> Option<(u16, u16)> {
-        self.bottom_pane
-            .cursor_pos_with_composer_right_reserve(area, self.right_reserve)
-    }
-
-    fn cursor_style(&self, area: Rect) -> crossterm::cursor::SetCursorStyle {
-        self.bottom_pane
-            .cursor_style_with_composer_right_reserve(area, self.right_reserve)
     }
 }
 

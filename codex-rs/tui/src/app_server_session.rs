@@ -677,24 +677,6 @@ impl AppServerSession {
         .await
     }
 
-    pub(crate) async fn fork_thread_without_mcp(
-        &mut self,
-        config: Config,
-        thread_id: ThreadId,
-    ) -> Result<AppServerStartedThread> {
-        self.fork_thread_at_with_mcp_mode(
-            config,
-            thread_id,
-            /*last_turn_id*/ None,
-            /*before_turn_id*/ None,
-            ForkGoalContinuation::StartIfIdle,
-            ForkMcpMode::Disabled,
-            None,
-            ForkPresentation::SideConversation,
-        )
-        .await
-    }
-
     pub(crate) async fn fork_thread_at(
         &mut self,
         config: Config,
