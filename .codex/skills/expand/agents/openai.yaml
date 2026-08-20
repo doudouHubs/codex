@@ -1,0 +1,6 @@
+interface:
+  display_name: "Expand"
+  short_description: "按当前 Git 提交增量维护个人功能说明文档"
+  default_prompt: "Use $expand to incrementally update Expand.md from the current Git history and worktree changes."
+policy:
+  allow_implicit_invocation: false
