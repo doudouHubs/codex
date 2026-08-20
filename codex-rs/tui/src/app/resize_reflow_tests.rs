@@ -97,6 +97,77 @@ async fn initial_resume_replay_retains_scrollback_beyond_the_visible_viewport() 
 }
 
 #[tokio::test]
+async fn initial_resume_replay_renders_latest_turn_without_trimming_transcript() -> Result<()> {
+    let mut app = make_test_app().await;
+    app.config.terminal_resize_reflow.max_rows = TerminalResizeReflowMaxRows::Limit(32);
+    let mut tui = crate::tui::test_support::make_test_tui()?;
+
+    app.begin_initial_history_replay_buffer();
+    app.begin_initial_history_replay_turn("turn-1".to_string(), "turn-2".to_string());
+    app.insert_history_cell(
+        &mut tui,
+        Box::new(PlainHistoryCell::new(vec![Line::from("old prompt")])),
+    );
+    app.end_initial_history_replay_turn();
+
+    app.begin_initial_history_replay_turn("turn-2".to_string(), "turn-2".to_string());
+    app.insert_history_cell(
+        &mut tui,
+        Box::new(PlainHistoryCell::new(vec![Line::from("latest prompt")])),
+    );
+    app.insert_history_cell(
+        &mut tui,
+        Box::new(PlainHistoryCell::new(vec![Line::from("latest answer")])),
+    );
+    app.end_initial_history_replay_turn();
+
+    let buffer = app
+        .initial_history_replay_buffer
+        .as_ref()
+        .expect("initial replay buffer should remain active");
+    assert_eq!(app.transcript_cells.len(), 3);
+    assert_eq!(buffer.visible_cells.len(), 2);
+    assert!(buffer.has_hidden_history);
+    insta::assert_snapshot!(
+        buffer
+            .retained_lines
+            .iter()
+            .map(rendered_line_text)
+            .collect::<Vec<_>>()
+            .join("\n"),
+        @r"
+    latest prompt
+
+    latest answer
+    "
+    );
+
+    let has_hidden_history = buffer.has_hidden_history;
+    let mut notice_lines = buffer.retained_lines.iter().cloned().collect::<Vec<_>>();
+    app.prepend_scrollback_history_notice(&mut notice_lines, has_hidden_history, /*width*/ 80);
+    let binding = crate::keymap::primary_binding(&app.keymap.app.open_transcript)
+        .expect("open_transcript should have a primary binding");
+    assert_eq!(
+        rendered_line_text(&notice_lines[0]),
+        format!(
+            "Earlier messages are available — press {} to view the full transcript",
+            binding.display_label()
+        )
+    );
+
+    let mut overlay = crate::pager_overlay::Overlay::new_transcript(
+        app.transcript_cells.clone(),
+        app.keymap.pager.clone(),
+    );
+    if let crate::pager_overlay::Overlay::Transcript(transcript) = &mut overlay {
+        assert!(transcript.cells_match(&app.transcript_cells));
+    } else {
+        panic!("expected transcript overlay");
+    }
+    Ok(())
+}
+
+#[tokio::test]
 async fn resize_reflow_preserves_configured_scrollback_when_the_terminal_height_changes() {
     let mut app = make_test_app().await;
     app.config.terminal_resize_reflow.max_rows = TerminalResizeReflowMaxRows::Limit(48);

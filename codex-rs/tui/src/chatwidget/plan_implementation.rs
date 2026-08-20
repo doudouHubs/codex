@@ -1,6 +1,7 @@
 use codex_protocol::config_types::CollaborationModeMask;
 
 use crate::app_event::AppEvent;
+use crate::app_event::PlanImplementationRequest;
 use crate::bottom_pane::SelectionAction;
 use crate::bottom_pane::SelectionItem;
 use crate::bottom_pane::SelectionViewParams;
@@ -34,10 +35,12 @@ pub(super) fn selection_view_params(
         Some(mask) => {
             let user_text = PLAN_IMPLEMENTATION_CODING_MESSAGE.to_string();
             let actions: Vec<SelectionAction> = vec![Box::new(move |tx| {
-                tx.send(AppEvent::SubmitUserMessageWithMode {
-                    text: user_text.clone(),
-                    collaboration_mode: mask.clone(),
-                });
+                tx.send(AppEvent::PlanImplementation(
+                    PlanImplementationRequest::ContinueCurrentContext {
+                        text: user_text.clone(),
+                        collaboration_mode: mask.clone(),
+                    },
+                ));
             })];
             (actions, None)
         }
@@ -57,9 +60,11 @@ pub(super) fn selection_view_params(
             let user_text =
                 format!("{PLAN_IMPLEMENTATION_CLEAR_CONTEXT_PREFIX}\n\n{plan_markdown}");
             let actions: Vec<SelectionAction> = vec![Box::new(move |tx| {
-                tx.send(AppEvent::ClearUiAndSubmitUserMessage {
-                    text: user_text.clone(),
-                });
+                tx.send(AppEvent::PlanImplementation(
+                    PlanImplementationRequest::ClearContext {
+                        text: user_text.clone(),
+                    },
+                ));
             })];
             (actions, None)
         }

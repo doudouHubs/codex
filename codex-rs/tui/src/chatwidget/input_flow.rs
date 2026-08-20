@@ -7,6 +7,13 @@
 use super::*;
 use crate::bottom_pane::ComposerPromptMode;
 
+#[derive(Clone, Copy)]
+enum UserMessageSubmissionPresentation {
+    #[cfg(test)]
+    Normal,
+    PlanImplementation,
+}
+
 impl ChatWidget {
     #[cfg(test)]
     pub(crate) fn submit_user_message_text(&mut self, text: String) {
@@ -269,10 +276,41 @@ impl ChatWidget {
         );
     }
 
+    #[cfg(test)]
     pub(crate) fn submit_user_message_with_mode(
         &mut self,
         text: String,
+        collaboration_mode: CollaborationModeMask,
+    ) {
+        self.submit_user_message_with_mode_and_presentation(
+            text,
+            collaboration_mode,
+            UserMessageSubmissionPresentation::Normal,
+        );
+    }
+
+    pub(crate) fn submit_plan_implementation(
+        &mut self,
+        text: String,
+        collaboration_mode: CollaborationModeMask,
+    ) {
+        self.submit_user_message_with_mode_and_presentation(
+            text,
+            collaboration_mode,
+            UserMessageSubmissionPresentation::PlanImplementation,
+        );
+    }
+
+    /// 在新 session 挂载完成后转发 Plan 实施的展示动效，避免 App 层直接越过 widget 访问底部面板。
+    pub(crate) fn start_plan_implementation_effect(&mut self) {
+        self.bottom_pane.start_plan_implementation_effect();
+    }
+
+    fn submit_user_message_with_mode_and_presentation(
+        &mut self,
+        text: String,
         mut collaboration_mode: CollaborationModeMask,
+        presentation: UserMessageSubmissionPresentation,
     ) {
         if self.blocks_direct_input {
             self.add_error_message(PARENT_OWNED_INPUT_MESSAGE.to_string());
@@ -292,6 +330,12 @@ impl ChatWidget {
             return;
         }
         self.set_collaboration_mask_from_user_action(collaboration_mode);
+        if matches!(
+            presentation,
+            UserMessageSubmissionPresentation::PlanImplementation
+        ) {
+            self.bottom_pane.start_plan_implementation_effect();
+        }
         let should_queue = self.is_plan_streaming_in_tui();
         let user_message = UserMessage {
             text,

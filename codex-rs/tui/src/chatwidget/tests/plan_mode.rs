@@ -171,12 +171,14 @@ async fn plan_implementation_popup_yes_emits_submit_message_event() {
     chat.handle_key_event(KeyEvent::from(KeyCode::Enter));
 
     let event = rx.try_recv().expect("expected AppEvent");
-    let AppEvent::SubmitUserMessageWithMode {
-        text,
-        collaboration_mode,
-    } = event
+    let AppEvent::PlanImplementation(
+        crate::app_event::PlanImplementationRequest::ContinueCurrentContext {
+            text,
+            collaboration_mode,
+        },
+    ) = event
     else {
-        panic!("expected SubmitUserMessageWithMode, got {event:?}");
+        panic!("expected PlanImplementation current-context request, got {event:?}");
     };
     assert_eq!(
         text,
@@ -197,8 +199,11 @@ async fn plan_implementation_popup_clear_context_emits_clear_submit_event() {
     chat.handle_key_event(KeyEvent::from(KeyCode::Enter));
 
     let event = rx.try_recv().expect("expected AppEvent");
-    let AppEvent::ClearUiAndSubmitUserMessage { text } = event else {
-        panic!("expected ClearUiAndSubmitUserMessage, got {event:?}");
+    let AppEvent::PlanImplementation(crate::app_event::PlanImplementationRequest::ClearContext {
+        text,
+    }) = event
+    else {
+        panic!("expected PlanImplementation clear-context request, got {event:?}");
     };
     assert_eq!(
         text,

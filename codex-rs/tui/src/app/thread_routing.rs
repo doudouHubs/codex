@@ -1284,7 +1284,8 @@ impl App {
             self.chat_widget.set_token_info(/*info*/ None);
         }
         match presentation {
-            ThreadAttachPresentation::SessionLineage => {
+            ThreadAttachPresentation::SessionLineage
+            | ThreadAttachPresentation::PlanImplementation => {
                 self.chat_widget.handle_thread_session(session);
             }
             ThreadAttachPresentation::PromptEdit => {
@@ -1323,6 +1324,11 @@ impl App {
                     self.enqueue_thread_feedback_event(thread_id, event).await;
                 }
             }
+        }
+        if matches!(presentation, ThreadAttachPresentation::PlanImplementation) {
+            // 新 widget 已完成 effort baseline 和状态栏刷新，此时启动动效才能跨过 widget 重建
+            // 保留下来，并且不会被首条实施消息的提交流程覆盖。
+            self.chat_widget.start_plan_implementation_effect();
         }
         self.chat_widget
             .set_initial_user_message_submit_suppressed(/*suppressed*/ false);

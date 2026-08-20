@@ -39,7 +39,8 @@ impl App {
             if let Some(Overlay::Transcript(t)) = &mut self.overlay {
                 t.insert_cell(cell.clone());
             }
-            self.transcript_cells.push(cell);
+            self.transcript_cells.push(cell.clone());
+            self.record_initial_history_replay_cell(cell);
         }
 
         // Walk backward to find the contiguous run of streaming AgentMessageCells that
@@ -61,6 +62,8 @@ impl App {
                     inline_visualization_context,
                 ),
             );
+            let replaced_cells = self.transcript_cells[start..end].to_vec();
+            self.replace_initial_history_replay_cells(&replaced_cells, Some(consolidated.clone()));
             self.transcript_cells
                 .splice(start..end, std::iter::once(consolidated.clone()));
 

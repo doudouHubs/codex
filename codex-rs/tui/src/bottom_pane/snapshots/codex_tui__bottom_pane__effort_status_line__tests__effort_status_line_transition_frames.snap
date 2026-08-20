@@ -1,5 +1,6 @@
 ---
 source: tui/src/bottom_pane/effort_status_line_tests.rs
+assertion_line: 220
 expression: "frames.join(\"\\n\")"
 ---
 MAX      0ms │gpt-5.4 high · main             │
@@ -26,3 +27,15 @@ ULTRA 1800ms │           U L T R A            │
 ULTRA 2020ms │gpt-5.4 ultra · main            │
 ULTRA 2250ms │gpt-5.4 ultra · main            │
 ULTRA 2500ms │gpt-5.4 ultra · main            │
+PLAN     0ms │gpt-5.4 high · main             │
+PLAN   300ms │    gpt-5.4 high · main         │
+PLAN   520ms │                   gpt-5.4 high │
+PLAN   680ms │          Plan Begins           │
+PLAN   820ms │          Plan Begins           │
+PLAN  1050ms │          Plan Begins           │
+PLAN  1320ms │          Plan Begins           │
+PLAN  1550ms │          Plan Begins           │
+PLAN  1800ms │          Plan Begins           │
+PLAN  2020ms │gpt-5.4 max · main              │
+PLAN  2250ms │gpt-5.4 max · main              │
+PLAN  2500ms │gpt-5.4 max · main              │

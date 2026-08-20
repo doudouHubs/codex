@@ -28,6 +28,13 @@ impl App {
             tui.frame_requester().schedule_frame();
         }
         self.transcript_cells.push(cell.clone());
+        if !self.should_render_initial_history_cell() {
+            // 旧 turn 只跳过主屏展示；transcript 和已打开的 overlay 仍必须保留完整 cell。
+            self.last_rendered_history_tail = None;
+            self.chat_widget.request_pending_usage_output_insertion();
+            return;
+        }
+        self.record_initial_history_replay_cell(cell.clone());
         let width = self
             .chat_widget
             .history_wrap_width(tui.terminal.last_known_screen_size.width);

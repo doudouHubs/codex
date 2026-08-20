@@ -40,6 +40,33 @@ fn effort_composer_baseline_repeat_and_lowering_do_not_replay() {
 }
 
 #[test]
+fn plan_implementation_uses_max_presentation_without_changing_effort() {
+    let (mut composer, _rx) = new_test_composer();
+    composer.set_status_line_enabled(/*enabled*/ true);
+    composer.set_status_line(Some(Line::from("gpt-5.4 high · main")));
+    composer.set_active_reasoning_effort(
+        Some(&ReasoningEffort::High),
+        /*animations_enabled*/ false,
+    );
+
+    assert!(composer.start_plan_implementation_effect(/*animations_enabled*/ true));
+    assert_eq!(composer.effort_tier, None);
+    assert!(composer.effort_ignition.is_some());
+    assert!(composer.effort_status_line_transition.is_some());
+}
+
+#[test]
+fn plan_implementation_respects_reduced_motion() {
+    let (mut composer, _rx) = new_test_composer();
+    composer.set_status_line_enabled(/*enabled*/ true);
+    composer.set_status_line(Some(Line::from("gpt-5.4 high · main")));
+
+    assert!(!composer.start_plan_implementation_effect(/*animations_enabled*/ false));
+    assert!(composer.effort_ignition.is_none());
+    assert!(composer.effort_status_line_transition.is_none());
+}
+
+#[test]
 fn effort_transition_does_not_queue_a_missing_outgoing_status_line() {
     let (mut composer, _rx) = new_test_composer();
     composer.set_status_line_enabled(/*enabled*/ true);

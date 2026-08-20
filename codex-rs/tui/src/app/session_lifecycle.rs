@@ -17,6 +17,7 @@ use std::collections::HashSet;
 pub(super) enum ThreadAttachPresentation {
     SessionLineage,
     PromptEdit,
+    PlanImplementation,
 }
 
 /// Reports whether a loaded-thread backfill completed and which descendants already had their
@@ -654,6 +655,26 @@ impl App {
         initial_user_message: Option<crate::chatwidget::UserMessage>,
         new_thread_name: Option<String>,
     ) {
+        self.start_fresh_session_with_summary_hint_and_presentation(
+            tui,
+            app_server,
+            session_start_source,
+            initial_user_message,
+            new_thread_name,
+            ThreadAttachPresentation::SessionLineage,
+        )
+        .await;
+    }
+
+    pub(super) async fn start_fresh_session_with_summary_hint_and_presentation(
+        &mut self,
+        tui: &mut tui::Tui,
+        app_server: &mut AppServerSession,
+        session_start_source: Option<ThreadStartSource>,
+        initial_user_message: Option<crate::chatwidget::UserMessage>,
+        new_thread_name: Option<String>,
+        presentation: ThreadAttachPresentation,
+    ) {
         // Start a fresh in-memory session while preserving resumability via persisted rollout
         // history. If an initial message is provided, `enqueue_primary_thread_session` suppresses it
         // until the new session is configured and any replayed turns have been rendered.
@@ -705,7 +726,7 @@ impl App {
                     .replace_chat_widget_with_app_server_thread(
                         tui,
                         started,
-                        ThreadAttachPresentation::SessionLineage,
+                        presentation,
                         initial_user_message,
                     )
                     .await

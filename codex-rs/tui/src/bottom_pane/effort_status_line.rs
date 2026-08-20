@@ -4,12 +4,13 @@
 //! The previous status line slides to the right while it picks up the tier
 //! accent and fades away. The tier letters then appear across the row with
 //! wider peripheral gaps, converge into a centered `M A X` or `U L T R A`, and
-//! fade out before the refreshed status line fades in. The clock starts only
-//! when the passive footer row is rendered, so a picker, flash, or
-//! instructional footer cannot consume the animation before it becomes
-//! visible. ANSI-16 and unknown-color terminals skip the transition and keep
-//! the normal status line; browser-backed and native terminals with ANSI-256
-//! or truecolor can show the full effect.
+//! fade out before the refreshed status line fades in. Plan 实施沿用 Max 配色，
+//! 并使用居中的字面量 `Plan Begins` 标签。
+//! The clock starts only when the passive footer row is rendered, so a picker,
+//! flash, or instructional footer cannot consume the animation before it
+//! becomes visible. ANSI-16 and unknown-color terminals skip the transition and
+//! keep the normal status line; browser-backed and native terminals with
+//! ANSI-256 or truecolor can show the full effect.
 
 use std::cell::Cell;
 use std::time::Duration;
@@ -59,8 +60,15 @@ impl EffortTier {
     }
 }
 
+#[derive(Clone, Copy)]
+enum EffortStatusLineLabel {
+    Tier,
+    PlanBegins,
+}
+
 pub(crate) struct EffortStatusLineTransition {
     tier: EffortTier,
+    label: EffortStatusLineLabel,
     previous: Line<'static>,
     started_at: Cell<Option<Instant>>,
 }
@@ -69,9 +77,28 @@ impl EffortStatusLineTransition {
     pub(crate) fn new(tier: EffortTier, previous: Line<'static>) -> Self {
         Self {
             tier,
+            label: EffortStatusLineLabel::Tier,
             previous,
             started_at: Cell::new(None),
         }
+    }
+
+    pub(crate) fn new_for_plan_implementation(previous: Line<'static>) -> Self {
+        Self {
+            tier: EffortTier::Max,
+            label: EffortStatusLineLabel::PlanBegins,
+            previous,
+            started_at: Cell::new(None),
+        }
+    }
+
+    /// 复用已排队的过场，只替换展示契约，不重新捕获旧状态行。
+    ///
+    /// 真实 effort 切换可能早于 Plan 交接处理器排队。保留已捕获的滑出内容，可以延续现有
+    /// 过场，同时将中心文案和颜色切换到明确的 Plan 实施展示。
+    pub(crate) fn use_plan_implementation_presentation(&mut self) {
+        self.tier = EffortTier::Max;
+        self.label = EffortStatusLineLabel::PlanBegins;
     }
 
     pub(crate) fn is_finished(&self) -> bool {
@@ -92,12 +119,38 @@ impl EffortStatusLineTransition {
                 Duration::ZERO
             }
         };
-        transition_line_at(self.tier, Some(&self.previous), current, elapsed, width)
+        transition_line_at_with_label(
+            self.tier,
+            self.label,
+            Some(&self.previous),
+            current,
+            elapsed,
+            width,
+        )
     }
 }
 
+#[cfg(test)]
 fn transition_line_at(
     tier: EffortTier,
+    previous: Option<&Line<'static>>,
+    current: Option<&Line<'static>>,
+    elapsed: Duration,
+    width: u16,
+) -> Option<Line<'static>> {
+    transition_line_at_with_label(
+        tier,
+        EffortStatusLineLabel::Tier,
+        previous,
+        current,
+        elapsed,
+        width,
+    )
+}
+
+fn transition_line_at_with_label(
+    tier: EffortTier,
+    label: EffortStatusLineLabel,
     previous: Option<&Line<'static>>,
     current: Option<&Line<'static>>,
     elapsed: Duration,
@@ -138,7 +191,12 @@ fn transition_line_at(
             let fade = after_scroll.saturating_sub(LABEL_ASSEMBLE.saturating_add(LABEL_HOLD));
             (1.0, 1.0 - fade.as_secs_f32() / LABEL_FADE_OUT.as_secs_f32())
         };
-        return Some(tier_label_line(tier, width, assemble, opacity));
+        return Some(match label {
+            EffortStatusLineLabel::Tier => tier_label_line(tier, width, assemble, opacity),
+            EffortStatusLineLabel::PlanBegins => {
+                literal_label_line("Plan Begins", tier, width, opacity)
+            }
+        });
     }
 
     let fade_elapsed = after_scroll.saturating_sub(label_duration);
@@ -197,6 +255,21 @@ fn tier_label_line(tier: EffortTier, width: usize, assemble: f32, opacity: f32) 
         }
     }
 
+    truncate_line_to_width(Line::from(spans), width)
+}
+
+fn literal_label_line(
+    label: &'static str,
+    tier: EffortTier,
+    width: usize,
+    opacity: f32,
+) -> Line<'static> {
+    let mut style = Style::default().add_modifier(Modifier::BOLD);
+    apply_fade(&mut style, tier, opacity, /*tint*/ 1.0);
+    let label_line = Line::from(Span::styled(label, style));
+    let left_padding = width.saturating_sub(label_line.width()) / 2;
+    let mut spans = vec![Span::raw(" ".repeat(left_padding))];
+    spans.extend(label_line.spans);
     truncate_line_to_width(Line::from(spans), width)
 }
 

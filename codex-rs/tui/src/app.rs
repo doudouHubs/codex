@@ -519,6 +519,11 @@ struct InitialHistoryReplayBuffer {
     retained_lines: VecDeque<crate::terminal_hyperlinks::HyperlinkLine>,
     render_from_transcript_tail: bool,
     was_truncated: bool,
+    latest_turn_id: Option<String>,
+    current_turn_id: Option<String>,
+    has_hidden_history: bool,
+    visible_cells: Vec<Arc<dyn HistoryCell>>,
+    has_emitted_history_lines_before_replay: bool,
 }
 
 pub(crate) struct App {

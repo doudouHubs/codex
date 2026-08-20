@@ -73,6 +73,21 @@ pub(crate) enum ThreadGoalSetMode {
     },
 }
 
+/// 表示用户确认后从已批准 Plan 进入实施阶段的交接请求。
+///
+/// 将两条交接路径统一为语义事件，使 App 层可以在替换 `ChatWidget` 时传递一次性展示意图，
+/// 同时不改动普通消息提交事件。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum PlanImplementationRequest {
+    ContinueCurrentContext {
+        text: String,
+        collaboration_mode: CollaborationModeMask,
+    },
+    ClearContext {
+        text: String,
+    },
+}
+
 /// One absolute history offset returned by a batch lookup.
 ///
 /// Malformed rows retain their offset with `entry` set to `None` so the composer can cache the gap
@@ -329,13 +344,8 @@ pub(crate) enum AppEvent {
         enabled: bool,
     },
 
-    /// Clear the current context, start a fresh session, and submit an initial user message.
-    ///
-    /// This is the Plan Mode handoff path: the previous thread remains resumable, but the model
-    /// sees only the explicit prompt carried in `text` once the new session is configured.
-    ClearUiAndSubmitUserMessage {
-        text: String,
-    },
+    /// 执行用户确认的 Plan 实施交接。
+    PlanImplementation(PlanImplementationRequest),
 
     /// Open the resume picker inside the running TUI session.
     OpenResumePicker,
@@ -825,6 +835,18 @@ pub(crate) enum AppEvent {
     /// resize-reflow tail renderer.
     BeginThreadSwitchHistoryReplayBuffer,
 
+    /// 标记当前正在送入 App 的初始 resume 回放 turn。
+    ///
+    /// resume 仍保留所有 turn 到 transcript，但首次 inline 展示只呈现最后一个 turn；使用
+    /// id 让这个展示决定与回放数据本身解耦。
+    BeginInitialHistoryReplayTurn {
+        turn_id: String,
+        latest_turn_id: String,
+    },
+
+    /// 结束一个初始 resume turn 的展示范围。
+    EndInitialHistoryReplayTurn,
+
     InsertHistoryCell(Box<dyn HistoryCell>),
 
     /// Finish buffering initial resume replay after all replay events have been queued.
@@ -1116,12 +1138,6 @@ pub(crate) enum AppEvent {
 
     /// Open the custom prompt option from the review popup.
     OpenReviewCustomPrompt,
-
-    /// Submit a user message with an explicit collaboration mask.
-    SubmitUserMessageWithMode {
-        text: String,
-        collaboration_mode: CollaborationModeMask,
-    },
 
     /// Open the approval popup.
     FullScreenApprovalRequest(ApprovalRequest),

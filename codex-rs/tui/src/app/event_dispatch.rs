@@ -133,23 +133,33 @@ impl App {
             AppEvent::RawOutputModeChanged { enabled } => {
                 self.apply_raw_output_mode(tui, enabled, /*notify*/ false);
             }
-            AppEvent::ClearUiAndSubmitUserMessage { text } => {
-                self.clear_terminal_ui(tui, /*redraw_header*/ false)?;
-                self.reset_app_ui_state_after_clear();
+            AppEvent::PlanImplementation(request) => match request {
+                crate::app_event::PlanImplementationRequest::ContinueCurrentContext {
+                    text,
+                    collaboration_mode,
+                } => {
+                    self.chat_widget
+                        .submit_plan_implementation(text, collaboration_mode);
+                }
+                crate::app_event::PlanImplementationRequest::ClearContext { text } => {
+                    self.clear_terminal_ui(tui, /*redraw_header*/ false)?;
+                    self.reset_app_ui_state_after_clear();
 
-                self.start_fresh_session_with_summary_hint(
-                    tui,
-                    app_server,
-                    Some(ThreadStartSource::Clear),
-                    crate::chatwidget::create_initial_user_message(
-                        Some(text),
-                        Vec::new(),
-                        Vec::new(),
-                    ),
-                    /*new_thread_name*/ None,
-                )
-                .await;
-            }
+                    self.start_fresh_session_with_summary_hint_and_presentation(
+                        tui,
+                        app_server,
+                        Some(ThreadStartSource::Clear),
+                        crate::chatwidget::create_initial_user_message(
+                            Some(text),
+                            Vec::new(),
+                            Vec::new(),
+                        ),
+                        /*new_thread_name*/ None,
+                        ThreadAttachPresentation::PlanImplementation,
+                    )
+                    .await;
+                }
+            },
             AppEvent::OpenResumePicker => {
                 let picker_app_server = match crate::start_app_server_for_picker(
                     &self.config,
@@ -484,6 +494,15 @@ impl App {
             AppEvent::BeginThreadSwitchHistoryReplayBuffer => {
                 self.begin_thread_switch_history_replay_buffer();
             }
+            AppEvent::BeginInitialHistoryReplayTurn {
+                turn_id,
+                latest_turn_id,
+            } => {
+                self.begin_initial_history_replay_turn(turn_id, latest_turn_id);
+            }
+            AppEvent::EndInitialHistoryReplayTurn => {
+                self.end_initial_history_replay_turn();
+            }
             AppEvent::InsertHistoryCell(cell) => {
                 self.insert_history_cell(tui, cell);
             }
@@ -521,6 +540,11 @@ impl App {
                     Arc::new(history_cell::new_proposed_plan(source, &self.config.cwd));
 
                 if start < end {
+                    let replaced_cells = self.transcript_cells[start..end].to_vec();
+                    self.replace_initial_history_replay_cells(
+                        &replaced_cells,
+                        Some(consolidated.clone()),
+                    );
                     self.transcript_cells
                         .splice(start..end, std::iter::once(consolidated.clone()));
 
@@ -532,16 +556,25 @@ impl App {
                     self.finish_required_stream_reflow(tui)?;
                 } else {
                     self.transcript_cells.push(consolidated.clone());
+                    self.record_initial_history_replay_cell(consolidated.clone());
                     if let Some(Overlay::Transcript(t)) = &mut self.overlay {
                         t.insert_cell(consolidated.clone());
                         tui.frame_requester().schedule_frame();
                     }
-                    self.insert_history_cell_lines(
-                        tui,
-                        consolidated.as_ref(),
-                        self.chat_widget
-                            .history_wrap_width(tui.terminal.last_known_screen_size.width),
-                    );
+                    if self.should_render_initial_history_cell() {
+                        let width = self
+                            .chat_widget
+                            .history_wrap_width(tui.terminal.last_known_screen_size.width);
+                        if self.initial_history_replay_buffer.is_some() {
+                            self.insert_history_cell_lines_with_initial_replay_buffer(
+                                tui,
+                                consolidated.as_ref(),
+                                width,
+                            );
+                        } else {
+                            self.insert_history_cell_lines(tui, consolidated.as_ref(), width);
+                        }
+                    }
 
                     self.maybe_finish_stream_reflow(tui)?;
                 }
@@ -2445,13 +2478,6 @@ impl App {
             }
             AppEvent::OpenReviewCustomPrompt => {
                 self.chat_widget.show_review_custom_prompt();
-            }
-            AppEvent::SubmitUserMessageWithMode {
-                text,
-                collaboration_mode,
-            } => {
-                self.chat_widget
-                    .submit_user_message_with_mode(text, collaboration_mode);
             }
             AppEvent::ManageSkillsClosed => {
                 self.chat_widget.handle_manage_skills_closed();

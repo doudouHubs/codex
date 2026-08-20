@@ -353,6 +353,23 @@ impl BottomPane {
         }
     }
 
+    /// 播放用户确认 Plan 实施交接时专用的 Max 展示动效。
+    ///
+    /// 它与实际 effort 同步分离，因为这是用户意图触发的展示过场，不能成为模型设置的第二
+    /// 个事实来源。
+    pub(crate) fn start_plan_implementation_effect(&mut self) {
+        let animations_enabled = effort_ignition::effort_animation_enabled(
+            self.animations_enabled,
+            effective_stdout_color_level(),
+        );
+        if self
+            .composer
+            .start_plan_implementation_effect(animations_enabled)
+        {
+            self.request_redraw();
+        }
+    }
+
     /// Establishes a restored thread's effort without replaying its one-shot animation.
     pub(crate) fn set_active_reasoning_effort_baseline(
         &mut self,

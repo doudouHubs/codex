@@ -339,6 +339,8 @@ mod constructor;
 pub(crate) use self::connectors::ConnectorScopeGeneration;
 use self::connectors::ConnectorsState;
 mod exec_state;
+#[cfg(target_os = "windows")]
+mod external_terminal;
 use self::exec_state::RunningCommand;
 use self::exec_state::UnifiedExecProcessSummary;
 use self::exec_state::UnifiedExecWaitState;

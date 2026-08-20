@@ -47,6 +47,26 @@ struct ReflowCellDisplay {
     is_stream_continuation: bool,
 }
 
+impl InitialHistoryReplayBuffer {
+    fn is_resume_initial_replay(&self) -> bool {
+        self.latest_turn_id.is_some()
+    }
+
+    fn is_current_turn_latest(&self) -> bool {
+        self.current_turn_id
+            .as_ref()
+            .zip(self.latest_turn_id.as_ref())
+            .is_some_and(|(current, latest)| current == latest)
+    }
+
+    fn is_current_turn_hidden(&self) -> bool {
+        self.current_turn_id
+            .as_ref()
+            .zip(self.latest_turn_id.as_ref())
+            .is_some_and(|(current, latest)| current != latest)
+    }
+}
+
 /// Rendered transcript lines ready to be replayed into terminal scrollback.
 ///
 /// This is intentionally line-oriented rather than cell-oriented because the terminal only accepts
@@ -129,7 +149,10 @@ impl App {
     /// overlay replay continues through the normal deferred-history path.
     pub(super) fn begin_initial_history_replay_buffer(&mut self) {
         if !self.alt_screen_surface_active() {
-            self.initial_history_replay_buffer = Some(Default::default());
+            self.initial_history_replay_buffer = Some(InitialHistoryReplayBuffer {
+                has_emitted_history_lines_before_replay: self.has_emitted_history_lines,
+                ..Default::default()
+            });
         }
     }
 
@@ -141,10 +164,76 @@ impl App {
     pub(super) fn begin_thread_switch_history_replay_buffer(&mut self) {
         if self.resize_reflow_max_rows().is_some() && !self.alt_screen_surface_active() {
             self.initial_history_replay_buffer = Some(InitialHistoryReplayBuffer {
-                retained_lines: VecDeque::new(),
                 render_from_transcript_tail: true,
-                was_truncated: false,
+                ..Default::default()
             });
+        }
+    }
+
+    pub(super) fn begin_initial_history_replay_turn(
+        &mut self,
+        turn_id: String,
+        latest_turn_id: String,
+    ) {
+        let Some(buffer) = self.initial_history_replay_buffer.as_mut() else {
+            return;
+        };
+        buffer.current_turn_id = Some(turn_id.clone());
+        buffer.latest_turn_id = Some(latest_turn_id.clone());
+        if turn_id != latest_turn_id {
+            // 旧 turn 仍会进入 transcript，但首次主屏只保留最新 turn 的展示行。
+            buffer.has_hidden_history = true;
+        }
+    }
+
+    pub(super) fn end_initial_history_replay_turn(&mut self) {
+        if let Some(buffer) = self.initial_history_replay_buffer.as_mut() {
+            buffer.current_turn_id = None;
+        }
+    }
+
+    pub(super) fn should_render_initial_history_cell(&self) -> bool {
+        self.initial_history_replay_buffer
+            .as_ref()
+            .is_none_or(|buffer| !buffer.is_current_turn_hidden())
+    }
+
+    pub(super) fn record_initial_history_replay_cell(&mut self, cell: Arc<dyn HistoryCell>) {
+        if let Some(buffer) = self.initial_history_replay_buffer.as_mut()
+            && buffer.is_current_turn_latest()
+        {
+            buffer.visible_cells.push(cell);
+        }
+    }
+
+    pub(super) fn replace_initial_history_replay_cells(
+        &mut self,
+        replaced_cells: &[Arc<dyn HistoryCell>],
+        replacement: Option<Arc<dyn HistoryCell>>,
+    ) {
+        let Some(buffer) = self.initial_history_replay_buffer.as_mut() else {
+            return;
+        };
+        if !buffer.is_current_turn_latest() {
+            return;
+        }
+
+        let insertion_index = buffer.visible_cells.iter().position(|visible| {
+            replaced_cells
+                .iter()
+                .any(|replaced| Arc::ptr_eq(visible, replaced))
+        });
+        buffer.visible_cells.retain(|visible| {
+            !replaced_cells
+                .iter()
+                .any(|replaced| Arc::ptr_eq(visible, replaced))
+        });
+        if let Some(replacement) = replacement {
+            if let Some(insertion_index) = insertion_index {
+                buffer.visible_cells.insert(insertion_index, replacement);
+            } else {
+                buffer.visible_cells.push(replacement);
+            }
         }
     }
 
@@ -154,19 +243,31 @@ impl App {
     /// This mirrors terminal scrollback behavior and avoids making startup replay cheaper or more
     /// expensive than a later resize rebuild of the same transcript.
     pub(super) fn finish_initial_history_replay_buffer(&mut self, tui: &mut tui::Tui) {
-        let Some(buffer) = self.initial_history_replay_buffer.take() else {
+        let Some(mut buffer) = self.initial_history_replay_buffer.take() else {
             return;
         };
 
+        let is_filtered_resume = buffer.is_resume_initial_replay();
         if buffer.render_from_transcript_tail || self.alt_screen_surface_active() {
-            // Reflow clears any pre-replay or partially emitted history and applies the reserved
-            // history width. It also waits for an active overlay to close before rebuilding.
-            self.schedule_immediate_resize_reflow(tui);
-            return;
+            if is_filtered_resume && !self.alt_screen_surface_active() {
+                // consolidation 可能让临时 stream cell 变成最终 cell；这里只重建最新 turn，
+                // 防止一次全量 reflow 把已隐藏的旧 turn 又写回主屏。
+                let width = self
+                    .chat_widget
+                    .history_wrap_width(tui.terminal.last_known_screen_size.width);
+                self.rebuild_filtered_initial_replay_lines(&mut buffer, width);
+            } else {
+                // Reflow clears any pre-replay or partially emitted history and applies the reserved
+                // history width. It also waits for an active overlay to close before rebuilding.
+                self.schedule_immediate_resize_reflow(tui);
+                return;
+            }
         }
 
         if buffer.retained_lines.is_empty() {
-            self.request_scrollback_history_top_up(/*rendered_rows*/ 0);
+            if !is_filtered_resume {
+                self.request_scrollback_history_top_up(/*rendered_rows*/ 0);
+            }
             return;
         }
 
@@ -174,7 +275,11 @@ impl App {
         let width = self
             .chat_widget
             .history_wrap_width(tui.terminal.last_known_screen_size.width);
-        self.prepend_scrollback_history_notice(&mut retained_lines, buffer.was_truncated, width);
+        self.prepend_scrollback_history_notice(
+            &mut retained_lines,
+            buffer.was_truncated || buffer.has_hidden_history,
+            width,
+        );
         let retained_rows = retained_lines.len();
         tui.insert_history_hyperlink_lines_with_wrap_policy(
             retained_lines,
@@ -185,7 +290,28 @@ impl App {
         {
             tracing::warn!(error = %err, "failed to refresh thread usage after initial replay");
         }
-        self.request_scrollback_history_top_up(retained_rows);
+        if !is_filtered_resume {
+            self.request_scrollback_history_top_up(retained_rows);
+        }
+    }
+
+    fn rebuild_filtered_initial_replay_lines(
+        &mut self,
+        buffer: &mut InitialHistoryReplayBuffer,
+        width: u16,
+    ) {
+        self.has_emitted_history_lines = buffer.has_emitted_history_lines_before_replay;
+        let mut display = Vec::new();
+        for cell in buffer.visible_cells.clone() {
+            display.extend(self.display_lines_for_history_insert(cell.as_ref(), width));
+        }
+        buffer.retained_lines.clear();
+        if let Some(max_rows) = self.resize_reflow_max_rows() {
+            Self::buffer_initial_history_replay_display_lines(buffer, display, max_rows);
+        } else {
+            buffer.retained_lines.extend(display);
+        }
+        buffer.render_from_transcript_tail = false;
     }
 
     pub(super) fn insert_history_cell_lines_with_initial_replay_buffer(
@@ -284,6 +410,24 @@ impl App {
         Ok(())
     }
 
+    fn defer_filtered_initial_replay_reflow(&mut self) -> bool {
+        if self
+            .initial_history_replay_buffer
+            .as_ref()
+            .is_some_and(InitialHistoryReplayBuffer::is_resume_initial_replay)
+        {
+            if let Some(buffer) = self.initial_history_replay_buffer.as_mut() {
+                buffer.retained_lines.clear();
+                buffer.render_from_transcript_tail = true;
+            }
+            // 初始 resume 尚未结束时不能从完整 transcript 做 reflow，否则旧 turn 会绕过
+            // 展示过滤；等 EndInitialHistoryReplayBuffer 统一重建最新 turn。
+            self.transcript_reflow.clear_stream_flags();
+            return true;
+        }
+        false
+    }
+
     /// Finish stream consolidation by repairing any resize work that happened during streaming.
     ///
     /// This is called after agent-message stream cells have either been replaced by an
@@ -293,6 +437,9 @@ impl App {
     /// transient stream rows.
     pub(super) fn maybe_finish_stream_reflow(&mut self, tui: &mut tui::Tui) -> Result<()> {
         if self.transcript_reflow.take_stream_finish_reflow_needed() {
+            if self.defer_filtered_initial_replay_reflow() {
+                return Ok(());
+            }
             self.schedule_immediate_resize_reflow(tui);
             let screen_size = tui.terminal.last_known_screen_size;
             self.maybe_run_resize_reflow(tui, screen_size)?;
@@ -313,6 +460,10 @@ impl App {
     /// replaced as one styled source-backed cell. If this reflow is skipped after a stream-time
     /// resize, the visible scrollback can keep the pre-consolidation wrapping.
     pub(super) fn finish_required_stream_reflow(&mut self, tui: &mut tui::Tui) -> Result<()> {
+        if self.defer_filtered_initial_replay_reflow() {
+            return Ok(());
+        }
+
         // Capped initial replay normally buffers per-cell display rows. A live stream tail is
         // consolidated directly into `transcript_cells`, so any retained rows no longer describe
         // the canonical transcript. Let the replay-end event render the capped transcript tail

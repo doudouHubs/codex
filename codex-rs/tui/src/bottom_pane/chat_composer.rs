@@ -796,6 +796,44 @@ impl ChatComposer {
         true
     }
 
+    /// 启动用户确认 Plan 交接时仅用于展示的 Max 动效。
+    ///
+    /// 这里故意不修改实际 reasoning tier：交接后的 Default effort 可能是任意配置值，但进入
+    /// 实施阶段的用户可见过场固定使用 Max 橙金色。若真实 effort 切换已经排队，则保留其
+    /// 旧状态行作为滑出内容，只替换展示标签。
+    pub(crate) fn start_plan_implementation_effect(&mut self, animations_enabled: bool) -> bool {
+        if !animations_enabled {
+            return false;
+        }
+
+        let style = IgnitionStyle::random(self.effort_animation_style);
+        self.effort_ignition = Some(EffortIgnition::new(EffortTier::Max, style));
+        self.effort_animation_style = Some(style);
+
+        let can_show_status_line =
+            self.footer.status_line_enabled && !self.footer.plan_mode_nudge_visible;
+        if can_show_status_line {
+            let reused_transition = self
+                .effort_status_line_transition
+                .as_mut()
+                .filter(|transition| !transition.is_finished())
+                .map(|transition| {
+                    transition.use_plan_implementation_presentation();
+                })
+                .is_some();
+            if !reused_transition {
+                self.effort_status_line_transition =
+                    passive_footer_status_line(&self.footer_props())
+                        .map(EffortStatusLineTransition::new_for_plan_implementation);
+            }
+        }
+
+        if let Some(frame_requester) = &self.frame_requester {
+            frame_requester.schedule_frame();
+        }
+        true
+    }
+
     /// Establishes the current tier without retaining or starting a one-shot effect.
     pub(crate) fn set_active_reasoning_effort_baseline(
         &mut self,

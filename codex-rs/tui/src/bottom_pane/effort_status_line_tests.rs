@@ -86,6 +86,24 @@ fn label_and_refreshed_line_appear_in_order() {
 }
 
 #[test]
+fn plan_implementation_label_is_literal_and_centered() {
+    let previous = Line::from("gpt-5.4 medium · main");
+    let current = Line::from("gpt-5.4 high · main");
+
+    let label = transition_line_at_with_label(
+        EffortTier::Max,
+        EffortStatusLineLabel::PlanBegins,
+        Some(&previous),
+        Some(&current),
+        Duration::from_millis(1500),
+        /*width*/ 32,
+    )
+    .expect("Plan implementation label should be visible");
+
+    assert_eq!(text(&label), "          Plan Begins");
+}
+
+#[test]
 fn unicode_and_span_boundaries_are_safe_on_narrow_rows() {
     let previous = Line::from(vec!["模型 ".cyan(), "👩‍💻 main".underlined()]);
     let current = Line::from(vec!["模型 ".cyan(), "ultra · main".underlined()]);
@@ -182,6 +200,21 @@ fn transition_frames_snapshot() {
             let label = tier.label();
             frames.push(format!("{label:5} {millis:4}ms │{:<32}│", text(&line)));
         }
+    }
+
+    for millis in [
+        0, 300, 520, 680, 820, 1050, 1320, 1550, 1800, 2020, 2250, 2500,
+    ] {
+        let line = transition_line_at_with_label(
+            EffortTier::Max,
+            EffortStatusLineLabel::PlanBegins,
+            Some(&previous),
+            Some(&max),
+            Duration::from_millis(millis),
+            /*width*/ 32,
+        )
+        .expect("Plan implementation frame should render");
+        frames.push(format!("PLAN  {millis:4}ms │{:<32}│", text(&line)));
     }
 
     insta::assert_snapshot!("effort_status_line_transition_frames", frames.join("\n"));

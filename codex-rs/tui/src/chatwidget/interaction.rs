@@ -1,5 +1,7 @@
 //! Key routing and composer-adjacent UI interaction for `ChatWidget`.
 
+#[cfg(target_os = "windows")]
+use super::external_terminal;
 use super::*;
 use crate::bottom_pane::ComposerPromptMode;
 use crate::bottom_pane::LocalImageAttachment;
@@ -9,6 +11,57 @@ use crossterm::event::MouseEventKind;
 use ratatui::layout::Rect;
 
 impl ChatWidget {
+    #[cfg(target_os = "windows")]
+    fn try_launch_external_shell_command(&mut self, key_event: KeyEvent) -> bool {
+        if !matches!(
+            key_event,
+            KeyEvent {
+                code: KeyCode::Enter,
+                modifiers,
+                kind: KeyEventKind::Press,
+                ..
+            } if modifiers.contains(KeyModifiers::CONTROL)
+        ) {
+            return false;
+        }
+
+        // 外部终端快捷键只属于普通主 composer。弹窗、Prompt 子线程和父控子 agent 必须继续
+        // 走各自的输入协议，否则 Ctrl+Enter 会绕过它们的生命周期和权限边界。
+        if self.blocks_direct_input
+            || !self.bottom_pane.composer_input_enabled()
+            || self.bottom_pane.prompt_mode() != ComposerPromptMode::Inactive
+            || !self.bottom_pane.no_modal_or_popup_active()
+        {
+            return false;
+        }
+
+        let text = self.composer_text_with_pending();
+        let Some(command) = text.strip_prefix('!').map(str::trim) else {
+            return false;
+        };
+        if command.is_empty() {
+            return false;
+        }
+
+        self.bottom_pane.clear_quit_shortcut_hint();
+        self.quit_shortcut_expires_at = None;
+        self.quit_shortcut_key = None;
+
+        match external_terminal::launch(command, self.config.cwd.as_path()) {
+            Ok(()) => {
+                // 启动成功后才清空草稿；这样 wt.exe 或 shell 不可用时，用户仍能直接修正并重试。
+                self.bottom_pane
+                    .set_composer_text(String::new(), Vec::new(), Vec::new());
+                self.refresh_plan_mode_nudge();
+                self.request_redraw();
+            }
+            Err(error) => {
+                self.add_error_message(format!("Failed to launch external terminal: {error}"));
+            }
+        }
+        true
+    }
+
     /// Rebuild image elements from their visible placeholders after a Prompt draft crosses the
     /// App event boundary, where the original textarea element ranges are intentionally cleared.
     /// The placeholder is the only stable identity shared by the attachment state and the text.
@@ -83,6 +136,11 @@ impl ChatWidget {
             if self.bottom_pane.no_modal_or_popup_active() {
                 self.on_modal_or_popup_closed();
             }
+            return;
+        }
+
+        #[cfg(target_os = "windows")]
+        if self.try_launch_external_shell_command(key_event) {
             return;
         }
 
