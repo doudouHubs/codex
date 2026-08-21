@@ -1,0 +1,79 @@
+---
+source: tui/src/app/rules_sidebar_tests.rs
+expression: "format!(\"--- bottom ---\\n{bottom}\\n--- top ---\\n{top}\\n--- after wheel ---\\n{after_wheel}\")"
+---
+--- bottom ---
+                                                                              ││ Rules  0  refreshing
+transcript-02                                                                 ┃│
+                                                                              ┃│ Loading rules...
+transcript-03                                                                 ┃│
+                                                                              ┃│
+transcript-04                                                                 ┃│
+                                                                              ┃│
+transcript-05                                                                 ┃│
+                                                                              ┃│
+transcript-06                                                                 ┃│
+                                                                              ┃│
+transcript-07                                                                 ││
+                                                                              ││
+transcript-08                                                                 ││
+                                                                              ││
+transcript-09                                                                 ││
+                                                                              ││
+transcript-10                                                                 ││
+                                                                              ││
+transcript-11                                                                 ││
+                                                                               │
+ › Ask Codex to do anything                                                    │
+                                                                               │
+  gpt-test default · C:\tmp\project                                            │ Ctrl+T close
+--- top ---
+transcript-00                                                                 ┃│ Rules  0  refreshing
+                                                                              ┃│
+transcript-01                                                                 ┃│ Loading rules...
+                                                                              ┃│
+transcript-02                                                                 ┃│
+                                                                              ┃│
+transcript-03                                                                 ┃│
+                                                                              ┃│
+transcript-04                                                                 ┃│
+                                                                              ┃│
+transcript-05                                                                 ││
+                                                                              ││
+transcript-06                                                                 ││
+                                                                              ││
+transcript-07                                                                 ││
+                                                                              ││
+transcript-08                                                                 ││
+                                                                              ││
+transcript-09                                                                 ││
+                                                                              ││
+                                                                               │
+ › Ask Codex to do anything                                                    │
+                                                                               │
+  gpt-test default · C:\tmp\project                                            │ Ctrl+T close
+--- after wheel ---
+                                                                              ┃│ Rules  0  refreshing
+transcript-01                                                                 ┃│
+                                                                              ┃│ Loading rules...
+transcript-02                                                                 ┃│
+                                                                              ┃│
+transcript-03                                                                 ┃│
+                                                                              ┃│
+transcript-04                                                                 ┃│
+                                                                              ┃│
+transcript-05                                                                 ┃│
+                                                                              ││
+transcript-06                                                                 ││
+                                                                              ││
+transcript-07                                                                 ││
+                                                                              ││
+transcript-08                                                                 ││
+                                                                              ││
+transcript-09                                                                 ││
+                                                                              ││
+transcript-10                                                                 ││
+                                                                               │
+ › Ask Codex to do anything                                                    │
+                                                                               │
+  gpt-test default · C:\tmp\project                                            │ Ctrl+T close

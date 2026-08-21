@@ -49,6 +49,7 @@ pub(crate) use self::input_boundary::discard_pending_terminal_input;
 #[cfg(all(test, unix))]
 use self::input_boundary::terminal_input_is_readable;
 use self::mouse_capture::MouseCaptureAction;
+use self::mouse_capture::MouseCaptureMode;
 use self::mouse_capture::MouseCaptureState;
 use crate::custom_terminal;
 use crate::custom_terminal::Terminal as CustomTerminal;
@@ -820,7 +821,7 @@ impl Tui {
 
         // Leave alt screen if active to avoid conflicts with external program `f`.
         let was_alt_screen = self.is_alt_screen_active();
-        let was_mouse_capture_requested = self.mouse_capture_state.is_requested();
+        let mouse_capture_mode = self.mouse_capture_state.mode();
         if was_alt_screen {
             let _ = self.leave_alt_screen();
         }
@@ -851,9 +852,7 @@ impl Tui {
             };
             let _ = self.enter_alt_screen_with_mode(alternate_scroll_mode);
         }
-        if was_mouse_capture_requested {
-            let _ = self.enable_mouse_capture();
-        }
+        let _ = self.reapply_mouse_capture_mode(mouse_capture_mode);
 
         self.resume_events();
         self.schedule_screen_size_recheck(Duration::ZERO);
@@ -959,22 +958,25 @@ impl Tui {
         }
     }
 
-    /// Register a surface's mouse-capture request.
+    /// Register the main chat surface's mouse-capture request.
     ///
     /// The terminal is physically captured only while Ctrl is held. This keeps native terminal
     /// selection and scrolling available by default while still allowing click-to-position input.
     pub fn enable_mouse_capture(&mut self) -> Result<()> {
-        if self.mouse_capture_state.request_enable() {
-            self.enable_mouse_capture_now()
-        } else {
-            self.disable_mouse_capture_now()
-        }
+        self.set_mouse_capture_mode(MouseCaptureMode::CtrlHeld)
+    }
+
+    /// Keep mouse events in the application for an alternate-screen surface such as the rules sidebar.
+    ///
+    /// Alternate-scroll is disabled for that surface, so relying on Ctrl-held capture would drop
+    /// ordinary wheel events before they reach the TUI event loop.
+    pub fn enable_mouse_capture_always(&mut self) -> Result<()> {
+        self.set_mouse_capture_mode(MouseCaptureMode::Always)
     }
 
     /// Clear a surface's mouse-capture request and restore native terminal mouse handling.
     pub fn disable_mouse_capture(&mut self) -> Result<()> {
-        self.mouse_capture_state.request_disable();
-        self.disable_mouse_capture_now()
+        self.set_mouse_capture_mode(MouseCaptureMode::Disabled)
     }
 
     /// Handle a standalone Ctrl key so mouse capture is available only while it is held.
@@ -1017,6 +1019,25 @@ impl Tui {
         };
         if let Err(err) = result {
             tracing::warn!(error = %err, "failed to update terminal mouse capture for Ctrl selection");
+        }
+    }
+
+    fn set_mouse_capture_mode(&mut self, mode: MouseCaptureMode) -> Result<()> {
+        match self.mouse_capture_state.set_mode(mode) {
+            MouseCaptureAction::Ignore => Ok(()),
+            MouseCaptureAction::Disable => self.disable_mouse_capture_now(),
+            MouseCaptureAction::Enable => self.enable_mouse_capture_now(),
+        }
+    }
+
+    fn reapply_mouse_capture_mode(&mut self, mode: MouseCaptureMode) -> Result<()> {
+        self.mouse_capture_state.set_mode(mode);
+        if self.mouse_capture_state.capture_required() {
+            // 外部程序会重置终端的鼠标模式，但不会同步 Tui 内部的原子状态，因此这里必须强制重开。
+            self.mouse_capture_enabled.store(false, Ordering::Relaxed);
+            self.enable_mouse_capture_now()
+        } else {
+            self.disable_mouse_capture_now()
         }
     }
 

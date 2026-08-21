@@ -8,10 +8,16 @@ use crossterm::event::KeyModifiers;
 use crossterm::event::MouseEvent;
 use crossterm::event::MouseEventKind;
 use pretty_assertions::assert_eq;
+use ratatui::buffer::Buffer;
+use ratatui::text::Line;
+use std::sync::Arc;
 
 use super::*;
 use crate::app::test_support::make_test_app;
+use crate::history_cell::HistoryCell;
+use crate::history_cell::PlainHistoryCell;
 use crate::key_hint;
+use crate::pager_overlay::ScrollDestination;
 
 fn start_test_session(app: &mut App) {
     app.chat_widget.handle_thread_session(ThreadSessionState {
@@ -62,6 +68,25 @@ fn open_test_skill_popup(app: &mut App) {
         });
     app.chat_widget.insert_str("$");
     assert!(!app.chat_widget.no_modal_or_popup_active());
+}
+
+fn render_rules_sidebar_transcript(app: &mut App, area: Rect) -> String {
+    let mut buffer = Buffer::empty(area);
+    let chat_widget = &app.chat_widget;
+    let state = app.rules_sidebar.as_mut().expect("rules sidebar");
+    state.render(area, &mut buffer, chat_widget, None);
+    (0..area.height)
+        .map(|y| {
+            (0..area.width)
+                .map(|x| buffer[(x, y)].symbol())
+                .collect::<String>()
+                .trim_end()
+                .to_string()
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
+        .trim_end()
+        .to_string()
 }
 
 #[tokio::test]
@@ -127,12 +152,38 @@ async fn plain_arrows_follow_official_composer_history_while_sidebar_is_open() {
 async fn mouse_wheel_only_scrolls_the_left_timeline() {
     let mut app = make_test_app().await;
     start_test_session(&mut app);
+    app.transcript_cells = (0..12)
+        .map(|index| {
+            Arc::new(PlainHistoryCell::new(vec![Line::from(format!(
+                "transcript-{index:02}"
+            ))])) as Arc<dyn HistoryCell>
+        })
+        .collect();
     let mut tui = crate::tui::test_support::make_test_tui().expect("test tui");
     tui.set_alt_screen_enabled(false);
-    tui.terminal.set_viewport_area(Rect::new(
+    let area = Rect::new(
         /*x*/ 0, /*y*/ 0, /*width*/ 120, /*height*/ 24,
-    ));
+    );
+    tui.terminal.set_viewport_area(area);
     app.open_rules_sidebar(&mut tui);
+
+    let bottom = render_rules_sidebar_transcript(&mut app, area);
+    assert!(
+        app.rules_sidebar
+            .as_ref()
+            .is_some_and(RulesSidebarState::transcript_follows_bottom)
+    );
+    app.rules_sidebar
+        .as_mut()
+        .expect("rules sidebar")
+        .jump_transcript(ScrollDestination::Top);
+    let top = render_rules_sidebar_transcript(&mut app, area);
+    assert!(
+        !app.rules_sidebar
+            .as_ref()
+            .expect("rules sidebar")
+            .transcript_follows_bottom()
+    );
 
     let left_timeline_scroll = MouseEvent {
         kind: MouseEventKind::ScrollDown,
@@ -141,6 +192,17 @@ async fn mouse_wheel_only_scrolls_the_left_timeline() {
         modifiers: KeyModifiers::NONE,
     };
     assert!(app.handle_rules_sidebar_mouse(&mut tui, left_timeline_scroll));
+    let after_wheel = render_rules_sidebar_transcript(&mut app, area);
+    assert!(
+        !app.rules_sidebar
+            .as_ref()
+            .expect("rules sidebar")
+            .transcript_follows_bottom()
+    );
+    insta::assert_snapshot!(
+        "rules_sidebar_mouse_scroll",
+        format!("--- bottom ---\n{bottom}\n--- top ---\n{top}\n--- after wheel ---\n{after_wheel}")
+    );
 
     let right_rules_scroll = MouseEvent {
         column: 119,

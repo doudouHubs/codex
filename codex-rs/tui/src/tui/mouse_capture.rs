@@ -13,41 +13,43 @@ pub(super) enum MouseCaptureAction {
     Enable,
 }
 
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub(super) enum MouseCaptureMode {
+    #[default]
+    Disabled,
+    CtrlHeld,
+    Always,
+}
+
 #[derive(Debug, Default)]
 pub(super) struct MouseCaptureState {
-    // surface 请求只决定当前界面是否允许捕获；物理捕获还必须满足 Ctrl 正在按住。
-    requested: bool,
+    // 普通聊天区只在 Ctrl 按住时捕获，侧栏等 alternate screen surface 则必须始终捕获滚轮。
+    mode: MouseCaptureMode,
     control_keys_pressed: u8,
 }
 
 impl MouseCaptureState {
-    pub(super) fn request_enable(&mut self) -> bool {
-        self.requested = true;
-        self.control_keys_pressed != 0
+    pub(super) fn mode(&self) -> MouseCaptureMode {
+        self.mode
     }
 
-    pub(super) fn request_disable(&mut self) {
-        self.requested = false;
+    pub(super) fn set_mode(&mut self, mode: MouseCaptureMode) -> MouseCaptureAction {
+        let was_capturing = self.capture_required();
+        self.mode = mode;
+        capture_action(was_capturing, self.capture_required())
     }
 
-    pub(super) fn is_requested(&self) -> bool {
-        self.requested
+    pub(super) fn capture_required(&self) -> bool {
+        matches!(self.mode, MouseCaptureMode::Always)
+            || (matches!(self.mode, MouseCaptureMode::CtrlHeld) && self.control_keys_pressed != 0)
     }
 
     pub(super) fn sync_control_key_mask(&mut self, control_keys_pressed: u8) -> MouseCaptureAction {
         let control_keys_pressed = control_keys_pressed & (LEFT_CONTROL | RIGHT_CONTROL);
-        let was_pressed = self.control_keys_pressed != 0;
-        let is_pressed = control_keys_pressed != 0;
+        let was_capturing = self.capture_required();
         self.control_keys_pressed = control_keys_pressed;
-
-        if !was_pressed && is_pressed && self.requested {
-            // Windows 控制台不会把独立 Ctrl 事件交给 crossterm，轮询状态也必须复用同一状态机。
-            MouseCaptureAction::Enable
-        } else if was_pressed && !is_pressed && self.requested {
-            MouseCaptureAction::Disable
-        } else {
-            MouseCaptureAction::Ignore
-        }
+        // Windows 控制台不会把独立 Ctrl 事件交给 crossterm，轮询必须覆盖按下到释放的完整周期。
+        capture_action(was_capturing, self.capture_required())
     }
 
     pub(super) fn handle_control_key(
@@ -60,28 +62,30 @@ impl MouseCaptureState {
                 if self.control_keys_pressed & mask != 0 {
                     return Some(MouseCaptureAction::Ignore);
                 }
+                let was_capturing = self.capture_required();
                 self.control_keys_pressed |= mask;
-                if self.control_keys_pressed == mask && self.requested {
-                    // 只有第一个 Ctrl 需要切换物理捕获，另一侧 Ctrl 只是延长按住周期。
-                    Some(MouseCaptureAction::Enable)
-                } else {
-                    Some(MouseCaptureAction::Ignore)
-                }
+                // 只有捕获需求发生变化时才切换物理模式；Always 模式下 Ctrl 只是普通输入修饰键。
+                Some(capture_action(was_capturing, self.capture_required()))
             }
             KeyEventKind::Repeat => Some(MouseCaptureAction::Ignore),
             KeyEventKind::Release => {
                 if self.control_keys_pressed & mask == 0 {
                     return Some(MouseCaptureAction::Ignore);
                 }
+                let was_capturing = self.capture_required();
                 self.control_keys_pressed &= !mask;
-                if self.control_keys_pressed == 0 && self.requested {
-                    // 松开最后一个 Ctrl 后必须立即交还终端，恢复原生划选和滚轮。
-                    Some(MouseCaptureAction::Disable)
-                } else {
-                    Some(MouseCaptureAction::Ignore)
-                }
+                // Always 模式不能因为释放 Ctrl 交还鼠标；关闭侧栏后切回 CtrlHeld 才恢复原语义。
+                Some(capture_action(was_capturing, self.capture_required()))
             }
         }
+    }
+}
+
+fn capture_action(was_capturing: bool, should_capture: bool) -> MouseCaptureAction {
+    match (was_capturing, should_capture) {
+        (false, true) => MouseCaptureAction::Enable,
+        (true, false) => MouseCaptureAction::Disable,
+        _ => MouseCaptureAction::Ignore,
     }
 }
 

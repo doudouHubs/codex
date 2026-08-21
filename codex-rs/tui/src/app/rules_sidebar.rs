@@ -24,8 +24,8 @@ impl App {
         };
         // sidebar 不拥有键盘焦点，禁用 wheel->arrow 转换，避免滚轮误触 composer 输入历史。
         let _ = tui.enter_alt_screen_without_alternate_scroll();
-        // 侧栏需要显式 mouse event 区分滚轮与方向键；主聊天区的捕获由 App::run 生命周期统一管理。
-        let _ = tui.enable_mouse_capture();
+        // 侧栏关闭 alternate-scroll 后，普通滚轮必须以 MouseEvent 进入应用，不能等 Ctrl 捕获。
+        let _ = tui.enable_mouse_capture_always();
         self.rules_sidebar_generation = self.rules_sidebar_generation.wrapping_add(1);
         self.rules_sidebar = Some(RulesSidebarState::new(
             thread_id,
@@ -201,7 +201,10 @@ impl App {
                 }
             }
             TuiEvent::Mouse(mouse_event) => {
-                self.handle_rules_sidebar_mouse(tui, mouse_event);
+                if !self.handle_rules_sidebar_mouse(tui, mouse_event) {
+                    self.chat_widget
+                        .handle_mouse_event(tui.terminal.viewport_area, mouse_event);
+                }
             }
             TuiEvent::Paste(pasted) => {
                 self.chat_widget.handle_paste(pasted.replace('\r', "\n"));
