@@ -2416,6 +2416,7 @@ dependencies = [
  "codex-skills-extension",
  "codex-state",
  "codex-stdio-to-uds",
+ "codex-supervisor",
  "codex-terminal-detection",
  "codex-thread-store",
  "codex-tui",
@@ -2791,6 +2792,7 @@ dependencies = [
  "codex-skills",
  "codex-skills-extension",
  "codex-state",
+ "codex-supervisor",
  "codex-terminal-detection",
  "codex-test-binary-support",
  "codex-thread-store",
@@ -4254,6 +4256,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "codex-supervisor"
+version = "0.0.0"
+dependencies = [
+ "anyhow",
+ "codex-utils-home-dir",
+ "libc",
+ "pretty_assertions",
+ "serde",
+ "serde_json",
+ "tokio",
+ "uuid",
+ "windows-sys 0.52.0",
+]
+
+[[package]]
 name = "codex-terminal-detection"
 version = "0.0.0"
 dependencies = [
@@ -4376,6 +4393,7 @@ dependencies = [
  "codex-sandboxing",
  "codex-shell-command",
  "codex-state",
+ "codex-supervisor",
  "codex-terminal-detection",
  "codex-utils-absolute-path",
  "codex-utils-approval-presets",

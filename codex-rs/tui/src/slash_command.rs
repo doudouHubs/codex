@@ -68,6 +68,7 @@ pub enum SlashCommand {
     Feedback,
     Rollout,
     Ps,
+    Dashboard,
     #[strum(to_string = "stop", serialize = "clean")]
     Stop,
     Clear,
@@ -117,6 +118,7 @@ impl SlashCommand {
             SlashCommand::Theme => "choose a syntax highlighting theme",
             SlashCommand::Pets => "choose or hide the terminal pet",
             SlashCommand::Ps => "list background terminals",
+            SlashCommand::Dashboard => "inspect and manage Codex processes",
             SlashCommand::Stop => "stop all background terminals",
             SlashCommand::MemoryDrop => "DO NOT USE",
             SlashCommand::MemoryUpdate => "DO NOT USE",
@@ -196,6 +198,7 @@ impl SlashCommand {
                 | SlashCommand::Pwd
                 | SlashCommand::Usage
                 | SlashCommand::Ide
+                | SlashCommand::Dashboard
         )
     }
 
@@ -239,6 +242,7 @@ impl SlashCommand {
             | SlashCommand::Usage
             | SlashCommand::DebugConfig
             | SlashCommand::Ps
+            | SlashCommand::Dashboard
             | SlashCommand::Stop
             | SlashCommand::App
             | SlashCommand::Goal

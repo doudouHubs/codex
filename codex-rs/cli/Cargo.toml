@@ -66,6 +66,7 @@ codex-rollout-trace = { workspace = true }
 codex-sandboxing = { workspace = true }
 codex-skills-extension = { workspace = true }
 codex-state = { workspace = true }
+codex-supervisor = { workspace = true }
 codex-stdio-to-uds = { workspace = true }
 codex-terminal-detection = { workspace = true }
 codex-thread-store = { workspace = true }

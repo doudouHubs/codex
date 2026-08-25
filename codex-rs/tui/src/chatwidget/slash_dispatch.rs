@@ -497,6 +497,9 @@ impl ChatWidget {
             SlashCommand::Ps => {
                 self.add_ps_output();
             }
+            SlashCommand::Dashboard => {
+                self.app_event_tx.send(AppEvent::OpenSupervisorDashboard);
+            }
             SlashCommand::Stop => {
                 self.clean_background_terminals();
             }
@@ -1103,6 +1106,7 @@ impl ChatWidget {
             | SlashCommand::Usage
             | SlashCommand::DebugConfig
             | SlashCommand::Ps
+            | SlashCommand::Dashboard
             | SlashCommand::Stop
             | SlashCommand::MemoryDrop
             | SlashCommand::MemoryUpdate

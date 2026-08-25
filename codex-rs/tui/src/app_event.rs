@@ -38,6 +38,10 @@ use codex_file_search::FileMatch;
 use codex_message_history::HistoryBatchCursor;
 use codex_protocol::ThreadId;
 use codex_protocol::openai_models::ModelPreset;
+use codex_supervisor::ProcessRecord;
+use codex_supervisor::SupervisorSnapshot;
+use codex_supervisor::WorkPage;
+use codex_supervisor::WorkSection;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use codex_utils_approval_presets::ApprovalPreset;
 use uuid::Uuid;
@@ -544,6 +548,50 @@ pub(crate) enum AppEvent {
 
     /// Result of computing a `/diff` command.
     DiffResult(PathBuf, String),
+
+    /// Open the local Codex process dashboard without creating a supervisor.
+    OpenSupervisorDashboard,
+
+    /// Reload the dashboard from the already-running supervisor.
+    RefreshSupervisorDashboard,
+
+    /// Result of a supervisor process snapshot request.
+    SupervisorSnapshotLoaded {
+        result: Result<SupervisorSnapshot, String>,
+    },
+
+    /// Open one process from the supervisor dashboard.
+    OpenSupervisorProcessDetails {
+        id: Uuid,
+    },
+
+    /// Result of loading one process from the supervisor dashboard.
+    SupervisorProcessDetailsLoaded {
+        result: Result<ProcessRecord, String>,
+    },
+
+    /// Read one paginated work section from a registered Codex process.
+    ReadSupervisorWork {
+        id: Uuid,
+        section: WorkSection,
+        cursor: Option<String>,
+    },
+
+    /// Result of reading one paginated work section.
+    SupervisorWorkLoaded {
+        result: Result<WorkPage, String>,
+    },
+
+    /// Request supervisor-mediated termination of another Codex process.
+    TerminateSupervisorProcess {
+        id: Uuid,
+    },
+
+    /// Result of a supervisor-mediated process termination request.
+    SupervisorProcessTerminated {
+        id: Uuid,
+        result: Result<(), String>,
+    },
 
     /// Open the app link view in the bottom pane.
     OpenAppLink {

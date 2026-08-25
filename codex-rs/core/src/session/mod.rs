@@ -219,6 +219,7 @@ mod rollout_reconstruction;
 #[allow(clippy::module_inception)]
 pub(crate) mod session;
 pub(crate) mod step_context;
+mod supervisor_reporting;
 mod thread_settings;
 pub(crate) mod time_reminder;
 mod token_budget;
@@ -1957,6 +1958,7 @@ impl Session {
 
     /// Persist the event to rollout and send it to clients.
     pub(crate) async fn send_event(&self, turn_context: &TurnContext, msg: EventMsg) {
+        supervisor_reporting::record_event(self.thread_id, turn_context.mode, &msg);
         let legacy_source = msg.clone();
         if let EventMsg::Error(error) = &legacy_source
             && error

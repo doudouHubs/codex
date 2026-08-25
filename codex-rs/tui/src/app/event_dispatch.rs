@@ -789,6 +789,59 @@ impl App {
                 );
                 self.activate_overlay(tui, overlay);
             }
+            AppEvent::OpenSupervisorDashboard => {
+                self.chat_widget.show_supervisor_dashboard_loading();
+                crate::supervisor_dashboard::request_snapshot(self.app_event_tx.clone());
+            }
+            AppEvent::RefreshSupervisorDashboard => {
+                // 刷新事件可能在用户按 Esc 后才从队列中取出；只有 dashboard 仍然可见时
+                // 才能把它当作有效的轮询请求，避免过期事件重新夺回输入焦点。
+                if self.chat_widget.supervisor_dashboard_is_active() {
+                    self.chat_widget.show_supervisor_dashboard_loading();
+                    crate::supervisor_dashboard::request_snapshot(self.app_event_tx.clone());
+                }
+            }
+            AppEvent::SupervisorSnapshotLoaded { result } => {
+                self.chat_widget.show_supervisor_dashboard(result);
+            }
+            AppEvent::OpenSupervisorProcessDetails { id } => {
+                self.chat_widget.show_supervisor_process_loading(id);
+                crate::supervisor_dashboard::request_process_details(self.app_event_tx.clone(), id);
+            }
+            AppEvent::SupervisorProcessDetailsLoaded { result } => {
+                self.chat_widget.show_supervisor_process_details(result);
+            }
+            AppEvent::ReadSupervisorWork {
+                id,
+                section,
+                cursor,
+            } => {
+                self.chat_widget.show_supervisor_work_loading(id, section);
+                crate::supervisor_dashboard::request_work_page(
+                    self.app_event_tx.clone(),
+                    id,
+                    section,
+                    cursor,
+                );
+            }
+            AppEvent::SupervisorWorkLoaded { result } => {
+                self.chat_widget.show_supervisor_work_page(result);
+            }
+            AppEvent::TerminateSupervisorProcess { id } => {
+                self.chat_widget.show_supervisor_dashboard_loading();
+                crate::supervisor_dashboard::request_termination(self.app_event_tx.clone(), id);
+            }
+            AppEvent::SupervisorProcessTerminated { id, result } => {
+                if let Err(error) = result {
+                    self.chat_widget.add_error_message(format!(
+                        "Failed to terminate Codex process {id}: {error}"
+                    ));
+                }
+                if self.chat_widget.supervisor_dashboard_is_active() {
+                    self.chat_widget.show_supervisor_dashboard_loading();
+                    crate::supervisor_dashboard::request_snapshot(self.app_event_tx.clone());
+                }
+            }
             AppEvent::OpenAppLink {
                 app_id,
                 title,

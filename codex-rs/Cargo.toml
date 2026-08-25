@@ -126,6 +126,7 @@ members = [
     "codex-client",
     "codex-api",
     "state",
+    "supervisor",
     "terminal-detection",
     "test-binary-support",
     "thread-manager-sample",
@@ -245,6 +246,7 @@ codex-shell-escalation = { path = "shell-escalation" }
 codex-skills-extension = { path = "ext/skills" }
 codex-skills = { path = "skills" }
 codex-state = { path = "state" }
+codex-supervisor = { path = "supervisor" }
 codex-stdio-to-uds = { path = "stdio-to-uds" }
 codex-terminal-detection = { path = "terminal-detection" }
 codex-test-binary-support = { path = "test-binary-support" }

@@ -10,6 +10,7 @@ use crate::tools::effective_tool_mode;
 use crate::tools::handlers::ApplyPatchHandler;
 use crate::tools::handlers::CodeModeExecuteHandler;
 use crate::tools::handlers::CodeModeWaitHandler;
+use crate::tools::handlers::CodexDashboardHandler;
 use crate::tools::handlers::CurrentTimeHandler;
 use crate::tools::handlers::DynamicToolHandler;
 use crate::tools::handlers::ExecCommandHandler;
@@ -1068,6 +1069,12 @@ fn add_core_utility_tools(context: &CoreToolPlanContext<'_>, registry: &mut Tool
     let turn_context = context.turn_context;
     let features = turn_context.config.features.get();
     let environment_mode = tool_environment_mode(context.environments);
+
+    // 只有已注册到 supervisor 的真实 worker 才暴露该工具；测试、离线库调用和
+    // 非 Codex 宿主没有查询通道时必须显式缺席，避免 Agent 看到一个必然失败的工具。
+    if codex_supervisor::current_reporter().is_some() {
+        registry.add(CodexDashboardHandler);
+    }
 
     if turn_context.config.update_plan_enabled {
         registry.add(PlanHandler);

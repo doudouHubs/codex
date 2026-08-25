@@ -23,6 +23,10 @@ const MISSPELLED_APPLY_PATCH_ARG0: &str = "applypatch";
 const EXECVE_WRAPPER_ARG0: &str = "codex-execve-wrapper";
 const LOCK_FILENAME: &str = ".lock";
 const TOKIO_WORKER_STACK_SIZE_BYTES: usize = 16 * 1024 * 1024;
+// CLI/TUI 顶层 future 会把多层 async 事件处理链展开在 `codex-main` 上；当技能列表
+// 返回时，这条链的临时状态可能超过通用 runtime worker 的 16 MiB 栈预算。主线程
+// 单独提高预算，避免把每个 Tokio worker 都放大而增加并发进程的内存成本。
+const CODEX_MAIN_STACK_SIZE_BYTES: usize = 32 * 1024 * 1024;
 
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub struct Arg0DispatchPaths {
@@ -224,12 +228,12 @@ where
     let path_entry_guard = arg0_dispatch();
     let current_exe = std::env::current_exe().ok();
 
-    // Regular invocation. Run the async entry point on a thread with the same
-    // stack budget as Tokio workers; `Runtime::block_on` otherwise runs the
-    // top-level future on the caller's OS stack.
+    // Regular invocation. Run the async entry point on a dedicated thread with
+    // a larger stack for the CLI/TUI future; `Runtime::block_on` otherwise runs
+    // the top-level future on the caller's OS stack.
     let handle = std::thread::Builder::new()
         .name("codex-main".to_string())
-        .stack_size(TOKIO_WORKER_STACK_SIZE_BYTES)
+        .stack_size(CODEX_MAIN_STACK_SIZE_BYTES)
         .spawn(move || {
             let runtime = build_runtime()?;
             runtime.block_on(run_main_with_arg0_guard(

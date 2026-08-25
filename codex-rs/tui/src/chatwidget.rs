@@ -1028,6 +1028,85 @@ impl ChatWidget {
         self.request_redraw();
     }
 
+    pub(crate) fn show_supervisor_dashboard_loading(&mut self) {
+        self.show_supervisor_dashboard_params(crate::supervisor_dashboard::loading_params());
+    }
+
+    pub(crate) fn show_supervisor_process_loading(&mut self, id: uuid::Uuid) {
+        self.show_supervisor_dashboard_params(crate::supervisor_dashboard::process_loading_params(
+            id,
+        ));
+    }
+
+    pub(crate) fn supervisor_dashboard_is_active(&self) -> bool {
+        self.bottom_pane.active_view_id() == Some(crate::supervisor_dashboard::VIEW_ID)
+    }
+
+    pub(crate) fn show_supervisor_dashboard(
+        &mut self,
+        result: Result<codex_supervisor::SupervisorSnapshot, String>,
+    ) {
+        let params = match result {
+            Ok(snapshot) => crate::supervisor_dashboard::snapshot_params(snapshot),
+            Err(error) => crate::supervisor_dashboard::error_params(error),
+        };
+        // 异步查询返回时用户可能已经按 Esc 关闭了 dashboard；过期结果不能把已关闭的
+        // 控制面重新弹出来，否则刷新请求会反过来夺走用户当前的输入焦点。
+        if self.supervisor_dashboard_is_active() {
+            self.show_supervisor_dashboard_params(params);
+        }
+    }
+
+    pub(crate) fn show_supervisor_process_details(
+        &mut self,
+        result: Result<codex_supervisor::ProcessRecord, String>,
+    ) {
+        let params = match result {
+            Ok(record) => crate::supervisor_dashboard::process_details_params(record),
+            Err(error) => crate::supervisor_dashboard::process_error_params(error),
+        };
+        if self.supervisor_dashboard_is_active() {
+            self.show_supervisor_dashboard_params(params);
+        }
+    }
+
+    pub(crate) fn show_supervisor_work_loading(
+        &mut self,
+        id: uuid::Uuid,
+        section: codex_supervisor::WorkSection,
+    ) {
+        self.show_supervisor_dashboard_params(crate::supervisor_dashboard::work_loading_params(
+            id, section,
+        ));
+    }
+
+    pub(crate) fn show_supervisor_work_page(
+        &mut self,
+        result: Result<codex_supervisor::WorkPage, String>,
+    ) {
+        let params = match result {
+            Ok(page) => crate::supervisor_dashboard::work_page_params(page),
+            Err(error) => crate::supervisor_dashboard::work_error_params(error),
+        };
+        if self.supervisor_dashboard_is_active() {
+            self.show_supervisor_dashboard_params(params);
+        }
+    }
+
+    fn show_supervisor_dashboard_params(
+        &mut self,
+        params: crate::bottom_pane::SelectionViewParams,
+    ) {
+        // 刷新结果优先替换现有 dashboard，避免每次轮询都往 view stack 里叠一层弹窗。
+        if self.bottom_pane.active_view_id() == Some(crate::supervisor_dashboard::VIEW_ID) {
+            self.bottom_pane
+                .replace_selection_view_if_active(crate::supervisor_dashboard::VIEW_ID, params);
+        } else {
+            self.bottom_pane.show_selection_view(params);
+        }
+        self.request_redraw();
+    }
+
     pub(crate) fn dismiss_app_server_request(&mut self, request: &ResolvedAppServerRequest) {
         // A remotely resolved request must not remain user-actionable. It may be
         // materialized in the bottom pane or still deferred behind active streaming.

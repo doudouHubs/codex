@@ -28,6 +28,8 @@ use codex_responses_api_proxy::Args as ResponsesApiProxyArgs;
 use codex_rollout_trace::REDUCED_STATE_FILE_NAME;
 use codex_rollout_trace::replay_bundle;
 use codex_state::StateRuntime;
+use codex_supervisor::ProcessKind as SupervisorProcessKind;
+use codex_supervisor::SupervisorLease;
 use codex_tui::AppExitInfo;
 use codex_tui::Cli as TuiCli;
 use codex_tui::ExitReason;
@@ -983,6 +985,12 @@ fn stage_str(stage: Stage) -> &'static str {
 }
 
 fn main() -> anyhow::Result<()> {
+    if std::env::args_os()
+        .nth(1)
+        .is_some_and(|arg| arg == codex_supervisor::DAEMON_ARG)
+    {
+        return codex_supervisor::run_daemon_blocking();
+    }
     let remote_control_disabled = codex_app_server::take_remote_control_disabled_env();
     arg0_dispatch_or_else(move |arg0_paths: Arg0DispatchPaths| async move {
         cli_main(arg0_paths, remote_control_disabled).await?;
@@ -994,13 +1002,25 @@ async fn cli_main(
     arg0_paths: Arg0DispatchPaths,
     remote_control_disabled: bool,
 ) -> anyhow::Result<()> {
+    let mut supervisor_lease = supervise_cli_invocation().await?;
+    let result = cli_main_inner(arg0_paths, remote_control_disabled).await;
+    if let Err(error) = supervisor_lease.close().await {
+        tracing::warn!(%error, "failed to unregister Codex CLI from supervisor");
+    }
+    result
+}
+
+async fn cli_main_inner(
+    arg0_paths: Arg0DispatchPaths,
+    remote_control_disabled: bool,
+) -> anyhow::Result<()> {
     let MultitoolCli {
         config_overrides: mut root_config_overrides,
         feature_toggles,
         remote,
         mut interactive,
         subcommand,
-    } = MultitoolCli::parse();
+    } = MultitoolCli::parse_from(codex_supervisor::filtered_process_args()?);
     // Fold --enable/--disable into config overrides so they flow to all subcommands.
     let toggle_overrides = feature_toggles.to_overrides()?;
     root_config_overrides.raw_overrides.extend(toggle_overrides);
@@ -2457,36 +2477,74 @@ async fn run_interactive_tui(
     let mut attempted_backups = HashSet::new();
     loop {
         let err = match start_tui().await {
-            Ok(exit_info) => return Ok(exit_info),
+            Ok(exit_info) => break Ok(exit_info),
             Err(err) => err,
         };
         let Some(startup_error) = local_state_db::startup_error(&err) else {
-            return Err(err);
+            break Err(err);
         };
         if local_state_db::is_locked(startup_error.detail()) {
             local_state_db::print_locked_guidance(startup_error);
-            return Ok(AppExitInfo::fatal(startup_error.to_string()));
+            break Ok(AppExitInfo::fatal(startup_error.to_string()));
         }
         if !local_state_db::is_auto_backup_recoverable(startup_error) {
             local_state_db::print_diagnostic_guidance(startup_error);
-            return Ok(AppExitInfo::fatal(startup_error.to_string()));
+            break Ok(AppExitInfo::fatal(startup_error.to_string()));
         }
         if !attempted_backups.insert(startup_error.database_path().to_path_buf()) {
             local_state_db::print_diagnostic_guidance(startup_error);
-            return Ok(AppExitInfo::fatal(startup_error.to_string()));
+            break Ok(AppExitInfo::fatal(startup_error.to_string()));
         }
 
         local_state_db::print_auto_backup_start(startup_error);
         match local_state_db::backup_files_for_fresh_start(startup_error).await {
-            Ok(backups) => local_state_db::confirm_fresh_start_rebuild(startup_error, &backups)?,
+            Ok(backups) => {
+                if let Err(error) =
+                    local_state_db::confirm_fresh_start_rebuild(startup_error, &backups)
+                {
+                    break Err(error);
+                }
+            }
             Err(backup_err) => {
                 local_state_db::print_diagnostic_guidance(startup_error);
-                return Ok(AppExitInfo::fatal(format!(
+                break Ok(AppExitInfo::fatal(format!(
                     "failed to move damaged Codex local database files into a backup folder automatically: {backup_err}"
                 )));
             }
         }
     }
+}
+
+/// 确保 CLI 先连接 supervisor 并取得租约，所有子命令都复用同一条进程治理路径。
+async fn supervise_cli_invocation() -> anyhow::Result<SupervisorLease> {
+    let is_worker = codex_supervisor::worker_identity()?.is_some();
+    if is_worker {
+        let client = codex_supervisor::SupervisorClient::connect().await?;
+        return client
+            .register_current_process(SupervisorProcessKind::Cli, None)
+            .await;
+    }
+
+    let daemon_executable = supervisor_daemon_executable()?;
+    let client = codex_supervisor::ensure_supervisor(&daemon_executable).await?;
+    client
+        .register_current_process(SupervisorProcessKind::Cli, None)
+        .await
+}
+
+fn supervisor_daemon_executable() -> std::io::Result<PathBuf> {
+    let current_executable = std::env::current_exe()?;
+    let file_name = if cfg!(windows) {
+        "codex-supervisor.exe"
+    } else {
+        "codex-supervisor"
+    };
+    let sibling = current_executable
+        .parent()
+        .map(|parent| parent.join(file_name));
+    Ok(sibling
+        .filter(|path| path.is_file())
+        .unwrap_or(current_executable))
 }
 
 fn resolve_remote_endpoint(
