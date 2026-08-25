@@ -1,0 +1,10 @@
+---
+source: tui/src/supervisor_dashboard_tests.rs
+expression: "render_params(error_params(\"failed to connect to supervisor socket\".to_string()),\n80)"
+---
+                                                                                
+  Codex process dashboard                                                       
+  Supervisor is unavailable                                                     
+                                                                                
+› 1. Retry connection      failed to connect to supervisor socket               
+  2. Back to process list

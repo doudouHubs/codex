@@ -1,0 +1,17 @@
+---
+source: tui/src/supervisor_dashboard_tests.rs
+expression: "render_params(work_page_params(page), 100)"
+---
+                                                                                                    
+  Process 00000000-0000-0000-0000-00000000a795: tool calls                                          
+  2 item(s) in this page | next cursor: 2                                                           
+                                                                                                    
+› 1. Back to process details                                                                        
+     #0 exec                  status: running                                                       
+                              input: {"command":["cargo","test"]}                                   
+                              created_at: 200                                                       
+     #1 apply_patch           status: completed                                                     
+                              input: {"path":"src/lib.rs"}                                          
+                              output: updated                                                       
+                              created_at: 201                                                       
+  2. Read next page           Continue reading tool calls from cursor 2.

@@ -1,0 +1,12 @@
+---
+source: tui/src/supervisor_dashboard_tests.rs
+expression: "render_params(snapshot_params(snapshot), 80)"
+---
+                                                                                
+  Codex process dashboard                                                       
+  Supervisor PID 901 | 0 registered process(es)                                 
+                                                                                
+› 1. Refresh process list           Supervisor PID 901 | 0 registered           
+                                    process(es)                                 
+     No Codex processes registered  The supervisor is running, but its          
+                                    registry is empty.

@@ -1,0 +1,15 @@
+---
+source: tui/src/supervisor_dashboard_tests.rs
+expression: "render_params(process_details_params(process), 100)"
+---
+                                                                                                    
+  CLI process details                                                                               
+  PID 42901 | status: running | activity: executingTool | mode: plan | summary: cargo test -p code  
+                                                                                                    
+› 1. Refresh process state                                                                          
+  2. Back to process list                                                                           
+  3. Terminate process      Supervisor will terminate this process and its child process group.     
+  4. Read prompt            Open the paginated prompt section for this process.                     
+  5. Read plan              Open the paginated plan section for this process.                       
+  6. Read messages          Open the paginated messages section for this process.                   
+  7. Read tool calls        Open the paginated tool calls section for this process.
