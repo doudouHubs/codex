@@ -1,6 +1,7 @@
 """Canonical Codex package directory layout."""
 
 import json
+import os
 import shutil
 import stat
 from pathlib import Path
@@ -56,6 +57,12 @@ def build_package_dir(
         bin_dir / f"codex-code-mode-host{spec.exe_suffix}",
         is_windows=spec.is_windows,
     )
+    if inputs.codex_supervisor_bin is not None:
+        copy_executable(
+            inputs.codex_supervisor_bin,
+            bin_dir / f"codex-supervisor{spec.exe_suffix}",
+            is_windows=spec.is_windows,
+        )
     copy_executable(inputs.rg_bin, path_dir / spec.rg_name, is_windows=spec.is_windows)
 
     if inputs.zsh_bin is not None:
@@ -100,6 +107,7 @@ def validate_package_dir(
     spec: TargetSpec,
     *,
     include_zsh: bool,
+    include_supervisor: bool = False,
 ) -> None:
     required_dirs = [
         Path("bin"),
@@ -139,6 +147,10 @@ def validate_package_dir(
         Path("codex-path") / spec.rg_name,
     ]
     executable_files = list(required_files)
+
+    if include_supervisor:
+        required_files.append(Path("bin") / f"codex-supervisor{spec.exe_suffix}")
+        executable_files.append(Path("bin") / f"codex-supervisor{spec.exe_suffix}")
 
     if include_zsh:
         zsh_path = Path("codex-resources") / ZSH_RESOURCE_PATH
@@ -184,4 +196,8 @@ def write_json(path: Path, value: object) -> None:
 
 
 def is_executable(path: Path) -> bool:
+    # Windows 下不能用 Unix mode bits 校验 PE 文件；这些权限位在 NTFS 上没有
+    # 可移植的执行语义。
+    if os.name == "nt":
+        return path.is_file()
     return bool(path.stat().st_mode & stat.S_IXUSR)

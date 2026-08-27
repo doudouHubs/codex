@@ -10,9 +10,19 @@ python := if os_family() == "windows" { "python" } else { "python3" }
 # local proxy configurable so the build remains usable when the proxy port changes.
 build_proxy := env_var_or_default("CODEX_BUILD_PROXY", "http://127.0.0.1:7890")
 # Release builds can use substantial memory, so cap local parallelism while keeping builds responsive.
-build_jobs := env_var_or_default("CODEX_BUILD_JOBS", "4")
-# Local builds prioritize completing within typical Windows memory limits; release packaging keeps the workspace profile.
+# Windows release builds also compile AWS-LC and can exceed a 16 GB machine's memory budget.
+build_jobs := env_var_or_default("CODEX_BUILD_JOBS", "1")
+# Keep release optimization enabled while avoiding the additional Thin-LTO peak memory cost locally.
 build_lto := env_var_or_default("CODEX_BUILD_LTO", "false")
+# codex-core 体量较大；降低一个优化等级并增加代码生成分片，避免 LLVM 在本地正式构建时爆内存。
+build_opt_level := env_var_or_default("CODEX_BUILD_OPT_LEVEL", "2")
+build_codegen_units := env_var_or_default("CODEX_BUILD_CODEGEN_UNITS", "16")
+windows_release_target := "x86_64-pc-windows-msvc"
+windows_release_target_dir := justfile_directory() / ".cache" / "codex-release-target"
+windows_release_dist_dir := justfile_directory() / "dist" / windows_release_target
+windows_v8_cache_dir := justfile_directory() / ".cache" / "rusty-v8-150.4.0-x86_64-pc-windows-msvc"
+windows_v8_archive := windows_v8_cache_dir / "rusty_v8_ptrcomp_sandbox_release_x86_64-pc-windows-msvc.lib.gz"
+windows_v8_binding := windows_v8_cache_dir / "src_binding_ptrcomp_sandbox_release_x86_64-pc-windows-msvc.rs"
 
 # Display help
 help:
@@ -66,9 +76,7 @@ build-i *args:
 
 [windows]
 build-i *args:
-    $env:CARGO_BUILD_JOBS = "{{ build_jobs }}"; $env:CARGO_PROFILE_RELEASE_LTO = "{{ build_lto }}"; cargo build --release --bin codex-supervisor
-    $env:CARGO_BUILD_JOBS = "{{ build_jobs }}"; $env:CARGO_PROFILE_RELEASE_LTO = "{{ build_lto }}"; $env:HTTP_PROXY = "{{ build_proxy }}"; $env:HTTPS_PROXY = "{{ build_proxy }}"; cargo build --release -p codex-cli --bin codex {args}
-    $env:CARGO_BUILD_JOBS = "{{ build_jobs }}"; $env:HTTP_PROXY = "{{ build_proxy }}"; $env:HTTPS_PROXY = "{{ build_proxy }}"; {{ python }} ..\scripts\run_cargo_with_codex_v8.py cargo build --release -p codex-code-mode-host --bin codex-code-mode-host {args}
+    $env:CODEX_BUILD_JOBS = "{{ build_jobs }}"; $env:CODEX_BUILD_LTO = "{{ build_lto }}"; $env:CODEX_BUILD_OPT_LEVEL = "{{ build_opt_level }}"; $env:CODEX_BUILD_CODEGEN_UNITS = "{{ build_codegen_units }}"; $env:CODEX_BUILD_PROXY = "{{ build_proxy }}"; $env:CODEX_RELEASE_TARGET = "{{ windows_release_target }}"; $env:CODEX_RELEASE_TARGET_DIR = "{{ windows_release_target_dir }}"; $env:CODEX_RELEASE_DIST_DIR = "{{ windows_release_dist_dir }}"; $env:CODEX_RELEASE_V8_CACHE_DIR = "{{ windows_v8_cache_dir }}"; & "{{ justfile_directory() }}\scripts\build_codex_release.ps1" {args}
 
 # Remove release artifacts without touching debug artifacts.
 clean:

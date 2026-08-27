@@ -319,7 +319,7 @@ impl SupervisorClient {
                 {
                     // 租约失效时继续运行会产生 dashboard 幽灵进程，也会破坏 supervisor 的唯一 owner
                     // 约束，因此这里直接结束 worker，而不是静默降级成未托管模式。
-                    eprintln!("codex supervisor heartbeat failed: {error}");
+                    eprintln!("codex supervisor heartbeat failed: {error:#}");
                     std::process::exit(1);
                 }
             }

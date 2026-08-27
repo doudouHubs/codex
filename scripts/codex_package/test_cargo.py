@@ -103,6 +103,7 @@ class SourceBinariesForTargetTest(unittest.TestCase):
                 profile="release",
                 entrypoint_bin=entrypoint,
                 code_mode_host_bin=code_mode_host,
+                codex_supervisor_bin=None,
                 bwrap_bin=None,
                 codex_command_runner_bin=command_runner,
                 codex_windows_sandbox_setup_bin=sandbox_setup,

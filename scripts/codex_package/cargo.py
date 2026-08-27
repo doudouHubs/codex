@@ -18,6 +18,7 @@ CODEX_RS_ROOT = REPO_ROOT / "codex-rs"
 class SourceBuildOutputs:
     entrypoint_bin: Path
     code_mode_host_bin: Path
+    codex_supervisor_bin: Path | None
     bwrap_bin: Path | None
     codex_command_runner_bin: Path | None
     codex_windows_sandbox_setup_bin: Path | None
@@ -31,6 +32,7 @@ def build_source_binaries(
     profile: str,
     entrypoint_bin: Path | None,
     code_mode_host_bin: Path | None,
+    codex_supervisor_bin: Path | None,
     bwrap_bin: Path | None,
     codex_command_runner_bin: Path | None,
     codex_windows_sandbox_setup_bin: Path | None,
@@ -87,6 +89,9 @@ def build_source_binaries(
             code_mode_host_bin.resolve()
             if code_mode_host_bin is not None
             else output_dir / f"codex-code-mode-host{spec.exe_suffix}"
+        ),
+        codex_supervisor_bin=(
+            codex_supervisor_bin.resolve() if codex_supervisor_bin is not None else None
         ),
         bwrap_bin=resolve_output_path(
             bwrap_bin,
@@ -186,6 +191,7 @@ def validate_source_outputs(outputs: SourceBuildOutputs) -> None:
     for path in [
         outputs.entrypoint_bin,
         outputs.code_mode_host_bin,
+        outputs.codex_supervisor_bin,
         outputs.bwrap_bin,
         outputs.codex_command_runner_bin,
         outputs.codex_windows_sandbox_setup_bin,

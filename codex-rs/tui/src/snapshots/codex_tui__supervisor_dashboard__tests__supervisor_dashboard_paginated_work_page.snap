@@ -7,10 +7,12 @@ expression: "render_params(work_page_params(page), 100)"
   2 item(s) in this page | next cursor: 2                                                           
                                                                                                     
 › 1. Back to process details                                                                        
-     #0 exec                  status: running                                                       
+     #0 exec                  id: call-1                                                            
+                              status: running                                                       
                               input: {"command":["cargo","test"]}                                   
                               created_at: 200                                                       
-     #1 apply_patch           status: completed                                                     
+     #1 apply_patch           id: call-2                                                            
+                              status: completed                                                     
                               input: {"path":"src/lib.rs"}                                          
                               output: updated                                                       
                               created_at: 201                                                       

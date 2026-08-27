@@ -315,6 +315,16 @@ pub(crate) fn work_page_params(page: WorkPage) -> SelectionViewParams {
     let section = page.section;
     let next_cursor = page.next_cursor.clone();
     let mut items = vec![back_to_process_item(id)];
+    if let Some(plan_text) = page.plan_text
+        && !plan_text.is_empty()
+    {
+        items.push(SelectionItem {
+            name: "Plan mode proposal".to_string(),
+            description: Some(limit_display_text(plan_text)),
+            is_disabled: true,
+            ..Default::default()
+        });
+    }
     items.extend(page.items.iter().cloned().map(work_item));
     if let Some(cursor) = next_cursor {
         let next_cursor = cursor.clone();
@@ -405,12 +415,16 @@ fn process_details_description(record: &ProcessRecord) -> String {
 
 fn work_item(item: WorkItem) -> SelectionItem {
     let mut description = String::new();
+    if let Some(id) = item.id {
+        append_work_field(&mut description, "id", &id);
+    }
     if let Some(status) = item.status {
-        description.push_str("status: ");
-        description.push_str(&status);
-        description.push('\n');
+        append_work_field(&mut description, "status", &status);
     }
     if !item.content.is_empty() {
+        if !description.is_empty() && !description.ends_with('\n') {
+            description.push('\n');
+        }
         description.push_str(&item.content);
     }
     if let Some(input) = item.input {

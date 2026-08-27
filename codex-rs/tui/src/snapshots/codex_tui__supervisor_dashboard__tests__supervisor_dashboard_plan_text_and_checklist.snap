@@ -1,0 +1,14 @@
+---
+source: tui/src/supervisor_dashboard_tests.rs
+assertion_line: 206
+expression: "render_params(work_page_params(page), 100)"
+---
+                                                                                                    
+  Process 00000000-0000-0000-0000-00000000a796: plan                                                
+  1 item(s) in this page                                                                            
+                                                                                                    
+› 1. Back to process details                                                                        
+     Plan mode proposal       1. inspect the supervisor                                             
+                              2. report the result                                                  
+     #0 plan step             status: inProgress                                                    
+                              inspect the supervisor

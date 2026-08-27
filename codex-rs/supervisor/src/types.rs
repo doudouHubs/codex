@@ -108,6 +108,10 @@ pub struct WorkMessage {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ToolCallRecord {
+    /// 工具生命周期的稳定 ID，用于把 started/completed 两个事件合并成一条记录。
+    /// 该字段保持可选，以便新客户端读取旧 supervisor 返回的历史页面。
+    #[serde(default)]
+    pub id: Option<String>,
     pub name: String,
     pub input: String,
     pub output: Option<String>,
@@ -123,6 +127,9 @@ pub struct WorkPage {
     pub section: WorkSection,
     pub items: Vec<WorkItem>,
     pub next_cursor: Option<String>,
+    /// Plan mode 生成的方案文本。只在 Plan 分区的第一页返回，checklist 仍在 items 中分页。
+    #[serde(default)]
+    pub plan_text: Option<String>,
 }
 
 /// 分页返回的统一条目。工具调用的 input/output 保持独立字段，Agent 不需要再解析
@@ -133,6 +140,9 @@ pub struct WorkItem {
     pub index: usize,
     pub title: String,
     pub content: String,
+    /// 工具调用 ID；普通消息和计划项没有该字段。
+    #[serde(default)]
+    pub id: Option<String>,
     pub status: Option<String>,
     pub input: Option<String>,
     pub output: Option<String>,
@@ -144,6 +154,9 @@ pub struct WorkItem {
 #[serde(rename_all = "camelCase")]
 pub struct WorkerDetails {
     pub prompt: Option<String>,
+    /// Plan mode 的模型方案文本，与 update_plan checklist 分开保存。
+    #[serde(default)]
+    pub plan_text: Option<String>,
     pub plan: Vec<PlanStep>,
     pub messages: Vec<WorkMessage>,
     pub tool_calls: Vec<ToolCallRecord>,
@@ -172,6 +185,7 @@ impl WorkerDetails {
                         index: 0,
                         title: "prompt".to_string(),
                         content: prompt.clone(),
+                        id: None,
                         status: None,
                         input: None,
                         output: None,
@@ -187,6 +201,7 @@ impl WorkerDetails {
                     index,
                     title: "plan step".to_string(),
                     content: step.step.clone(),
+                    id: None,
                     status: Some(step.status.clone()),
                     input: None,
                     output: None,
@@ -201,6 +216,7 @@ impl WorkerDetails {
                     index,
                     title: message.role.clone(),
                     content: message.content.clone(),
+                    id: None,
                     status: None,
                     input: None,
                     output: None,
@@ -215,6 +231,7 @@ impl WorkerDetails {
                     index,
                     title: call.name.clone(),
                     content: String::new(),
+                    id: call.id.clone(),
                     status: Some(call.status.clone()),
                     input: Some(call.input.clone()),
                     output: call.output.clone(),
@@ -232,6 +249,9 @@ impl WorkerDetails {
         // 但 50 条大工具调用仍可能让序列化后的响应超过 1 MiB；按最终 wire payload
         // 逐条试装，保证 Agent 和 TUI 得到的每一页都能真正通过 supervisor 传输。
         let mut page_items = Vec::new();
+        let plan_text = (section == WorkSection::Plan && offset == 0)
+            .then(|| self.plan_text.clone())
+            .flatten();
         for item in items.iter().skip(offset).take(limit) {
             page_items.push(item.clone());
             let candidate_end = offset + page_items.len();
@@ -240,6 +260,7 @@ impl WorkerDetails {
                 section,
                 items: page_items.clone(),
                 next_cursor: (candidate_end < items.len()).then(|| candidate_end.to_string()),
+                plan_text: plan_text.clone(),
             };
             let candidate_size =
                 serde_json::to_vec(&crate::protocol::Response::WorkPage(candidate_page))
@@ -262,6 +283,7 @@ impl WorkerDetails {
             section,
             items: page_items,
             next_cursor,
+            plan_text,
         })
     }
 }

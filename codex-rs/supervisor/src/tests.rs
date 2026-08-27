@@ -76,6 +76,7 @@ fn work_pages_are_bounded_and_cursored() {
     let id = Uuid::new_v4();
     let details = WorkerDetails {
         prompt: Some("inspect the worker registry".to_string()),
+        plan_text: Some("1. inspect\n2. report".to_string()),
         plan: vec![PlanStep {
             step: "read status".to_string(),
             status: "in_progress".to_string(),
@@ -94,6 +95,85 @@ fn work_pages_are_bounded_and_cursored() {
     assert_eq!(page.items.len(), 1);
     assert_eq!(page.next_cursor, None);
     assert_eq!(page.items[0].content, "show all processes");
+
+    let plan_page = details
+        .page(id, WorkSection::Plan, None, 1)
+        .expect("plan page should be readable");
+    assert_eq!(
+        plan_page.plan_text,
+        Some("1. inspect\n2. report".to_string())
+    );
+    assert_eq!(plan_page.items[0].content, "read status");
+}
+
+#[test]
+fn reporter_merges_tool_lifecycle_and_exposes_plan_text() {
+    let reporter = reporter::SupervisorReporter::new();
+    let process_id = Uuid::new_v4();
+    reporter.set_prompt("inspect the supervisor".to_string());
+    reporter.set_plan_text("first".to_string());
+    reporter.append_plan_delta("\nsecond".to_string());
+    reporter.upsert_tool_call(ToolCallRecord {
+        id: Some("call-1".to_string()),
+        name: "exec".to_string(),
+        input: "{\"command\":[\"pwd\"]}".to_string(),
+        output: None,
+        status: "running".to_string(),
+        created_at: Some(1),
+    });
+    reporter.upsert_tool_call(ToolCallRecord {
+        id: Some("call-1".to_string()),
+        name: "exec".to_string(),
+        input: String::new(),
+        output: Some("workspace".to_string()),
+        status: "completed".to_string(),
+        created_at: Some(2),
+    });
+
+    let plan_page = reporter
+        .page(process_id, WorkSection::Plan, None, 20)
+        .expect("plan page should be readable");
+    assert_eq!(plan_page.plan_text, Some("first\nsecond".to_string()));
+
+    let tool_page = reporter
+        .page(process_id, WorkSection::ToolCalls, None, 20)
+        .expect("tool page should be readable");
+    assert_eq!(tool_page.items.len(), 1);
+    assert_eq!(tool_page.items[0].id, Some("call-1".to_string()));
+    assert_eq!(tool_page.items[0].status, Some("completed".to_string()));
+    assert_eq!(tool_page.items[0].output, Some("workspace".to_string()));
+}
+
+#[test]
+fn newly_added_work_fields_are_optional_on_the_wire() {
+    let process_id = Uuid::new_v4();
+    let tool_call: ToolCallRecord = serde_json::from_value(serde_json::json!({
+        "name": "exec",
+        "input": "{}",
+        "output": null,
+        "status": "completed",
+        "createdAt": 1,
+    }))
+    .expect("legacy tool call should remain readable");
+    assert_eq!(tool_call.id, None);
+
+    let page: WorkPage = serde_json::from_value(serde_json::json!({
+        "processId": process_id,
+        "section": "messages",
+        "items": [{
+            "index": 0,
+            "title": "user",
+            "content": "inspect the supervisor",
+            "status": null,
+            "input": null,
+            "output": null,
+            "createdAt": null,
+        }],
+        "nextCursor": null,
+    }))
+    .expect("legacy work page should remain readable");
+    assert_eq!(page.plan_text, None);
+    assert_eq!(page.items[0].id, None);
 }
 
 #[test]
@@ -102,6 +182,7 @@ fn work_pages_fit_the_transport_frame_limit() {
     let details = WorkerDetails {
         tool_calls: (0..types::MAX_PAGE_LIMIT)
             .map(|index| ToolCallRecord {
+                id: Some(format!("call-{index}")),
                 name: format!("tool-{index}"),
                 input: "i".repeat(32 * 1024),
                 output: Some("o".repeat(32 * 1024)),

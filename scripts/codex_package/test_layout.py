@@ -36,6 +36,7 @@ class PackageLayoutTest(unittest.TestCase):
                             code_mode_host_bin=touch_executable(
                                 root / "codex-code-mode-host"
                             ),
+                            codex_supervisor_bin=None,
                             rg_bin=rg_bin,
                             zsh_bin=zsh_bin,
                             bwrap_bin=None,
@@ -73,6 +74,7 @@ class PackageLayoutTest(unittest.TestCase):
             inputs = PackageInputs(
                 entrypoint_bin=touch_executable(root / "codex-app-server"),
                 code_mode_host_bin=touch_executable(root / "codex-code-mode-host"),
+                codex_supervisor_bin=None,
                 rg_bin=touch_executable(root / "rg"),
                 zsh_bin=None,
                 bwrap_bin=touch_executable(root / "bwrap"),
@@ -95,6 +97,39 @@ class PackageLayoutTest(unittest.TestCase):
             )
 
             self.assertTrue((package_dir / "bin" / "codex-code-mode-host").is_file())
+
+    def test_windows_package_places_supervisor_beside_entrypoint(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            package_dir = root / "package"
+            package_dir.mkdir()
+            inputs = PackageInputs(
+                entrypoint_bin=touch_executable(root / "codex.exe"),
+                code_mode_host_bin=touch_executable(root / "codex-code-mode-host.exe"),
+                codex_supervisor_bin=touch_executable(root / "codex-supervisor.exe"),
+                rg_bin=touch_executable(root / "rg.exe"),
+                zsh_bin=None,
+                bwrap_bin=None,
+                codex_command_runner_bin=touch_executable(
+                    root / "codex-command-runner.exe"
+                ),
+                codex_windows_sandbox_setup_bin=touch_executable(
+                    root / "codex-windows-sandbox-setup.exe"
+                ),
+            )
+            variant = PACKAGE_VARIANTS["codex"]
+            spec = TARGET_SPECS["x86_64-pc-windows-msvc"]
+
+            build_package_dir(package_dir, "1.2.3", variant, spec, inputs)
+            validate_package_dir(
+                package_dir,
+                variant,
+                spec,
+                include_zsh=False,
+                include_supervisor=True,
+            )
+
+            self.assertTrue((package_dir / "bin" / "codex-supervisor.exe").is_file())
 
 
 def touch_executable(path: Path) -> Path:

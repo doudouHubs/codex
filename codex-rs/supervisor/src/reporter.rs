@@ -86,6 +86,30 @@ impl SupervisorReporter {
             .write()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
         state.details.prompt = Some(bound_text(&prompt));
+        state.status.updated_at = crate::unix_seconds();
+    }
+
+    pub fn set_plan_text(&self, plan_text: String) {
+        let mut state = self
+            .state
+            .write()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        state.details.plan_text = Some(bound_text(&plan_text));
+        state.status.updated_at = crate::unix_seconds();
+    }
+
+    pub fn append_plan_delta(&self, delta: String) {
+        if delta.is_empty() {
+            return;
+        }
+        let mut state = self
+            .state
+            .write()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let mut plan_text = state.details.plan_text.take().unwrap_or_default();
+        plan_text.push_str(&delta);
+        state.details.plan_text = Some(bound_text(&plan_text));
+        state.status.updated_at = crate::unix_seconds();
     }
 
     pub fn set_plan(&self, plan: Vec<PlanStep>) {
@@ -101,6 +125,7 @@ impl SupervisorReporter {
                 status: bound_text(&step.status),
             })
             .collect();
+        state.status.updated_at = crate::unix_seconds();
     }
 
     pub fn append_message(&self, mut message: WorkMessage) {
@@ -110,10 +135,16 @@ impl SupervisorReporter {
             .unwrap_or_else(std::sync::PoisonError::into_inner);
         message.role = bound_text(&message.role);
         message.content = bound_text(&message.content);
+        // 时间戳由 reporter 统一补齐，调用方只提交业务内容，避免不同事件入口产生
+        // 不一致的时间来源，也避免 core 依赖 supervisor 的内部时钟实现。
+        if message.created_at.is_none() {
+            message.created_at = Some(crate::unix_seconds());
+        }
         push_bounded(&mut state.details.messages, message);
+        state.status.updated_at = crate::unix_seconds();
     }
 
-    pub fn append_tool_call(&self, mut call: ToolCallRecord) {
+    pub fn upsert_tool_call(&self, mut call: ToolCallRecord) {
         let mut state = self
             .state
             .write()
@@ -122,7 +153,39 @@ impl SupervisorReporter {
         call.input = bound_text(&call.input);
         call.output = call.output.map(|output| bound_text(&output));
         call.status = bound_text(&call.status);
-        push_bounded(&mut state.details.tool_calls, call);
+        if call.created_at.is_none() {
+            call.created_at = Some(crate::unix_seconds());
+        }
+        if let Some(call_id) = call.id.as_deref()
+            && let Some(existing) = state
+                .details
+                .tool_calls
+                .iter_mut()
+                .find(|existing| existing.id.as_deref() == Some(call_id))
+        {
+            existing.name = call.name;
+            // 完成事件的 input 可能只带 call id；started 阶段已有完整参数时不能被
+            // 后续生命周期事件覆盖，否则 Agent 只能看到一条无法解释的调用记录。
+            if existing.input.is_empty() && !call.input.is_empty() {
+                existing.input = call.input;
+            }
+            if call.output.is_some() {
+                existing.output = call.output;
+            }
+            existing.status = call.status;
+            if existing.created_at.is_none() {
+                existing.created_at = call.created_at;
+            }
+        } else {
+            push_bounded(&mut state.details.tool_calls, call);
+        }
+        state.status.updated_at = crate::unix_seconds();
+    }
+
+    /// 兼容旧调用方的追加入口；带 ID 的新调用方应使用 `upsert_tool_call`，以便把
+    /// started/completed 生命周期合并为一条 Agent 可读的工具记录。
+    pub fn append_tool_call(&self, call: ToolCallRecord) {
+        self.upsert_tool_call(call);
     }
 
     pub(crate) fn status(&self) -> WorkerStatus {
@@ -204,6 +267,18 @@ pub fn record_current_prompt(prompt: String) {
     }
 }
 
+pub fn record_current_plan_text(plan_text: String) {
+    if let Some(reporter) = current_reporter() {
+        reporter.set_plan_text(plan_text);
+    }
+}
+
+pub fn append_current_plan_delta(delta: String) {
+    if let Some(reporter) = current_reporter() {
+        reporter.append_plan_delta(delta);
+    }
+}
+
 pub fn record_current_plan(plan: Vec<PlanStep>) {
     if let Some(reporter) = current_reporter() {
         reporter.set_plan(plan);
@@ -228,6 +303,27 @@ pub fn record_current_tool_call(
 ) {
     if let Some(reporter) = current_reporter() {
         reporter.append_tool_call(ToolCallRecord {
+            id: None,
+            name,
+            input,
+            output,
+            status,
+            created_at: Some(crate::unix_seconds()),
+        });
+    }
+}
+
+/// 带生命周期 ID 的工具调用入口，供新事件投影和需要合并 started/completed 的调用方使用。
+pub fn record_current_tool_call_with_id(
+    id: String,
+    name: String,
+    input: String,
+    output: Option<String>,
+    status: String,
+) {
+    if let Some(reporter) = current_reporter() {
+        reporter.upsert_tool_call(ToolCallRecord {
+            id: Some(id),
             name,
             input,
             output,

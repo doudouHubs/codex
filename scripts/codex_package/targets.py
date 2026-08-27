@@ -1,5 +1,6 @@
 """Supported package targets and default binary discovery."""
 
+import os
 import platform
 import stat
 from dataclasses import dataclass
@@ -40,6 +41,7 @@ class PackageVariant:
 class PackageInputs:
     entrypoint_bin: Path
     code_mode_host_bin: Path
+    codex_supervisor_bin: Path | None
     rg_bin: Path
     zsh_bin: Path | None
     bwrap_bin: Path | None
@@ -153,6 +155,10 @@ def resolve_input_path(
 
 
 def is_executable(path: Path) -> bool:
+    # Windows 的 NTFS 普通文件不提供可依赖的 Unix 执行位，PE 格式和 `.exe`
+    # 文件关联才是 Windows 侧的可执行边界。
+    if os.name == "nt":
+        return path.is_file()
     return bool(path.stat().st_mode & (stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH))
 
 

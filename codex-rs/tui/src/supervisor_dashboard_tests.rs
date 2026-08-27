@@ -156,6 +156,7 @@ fn dashboard_snapshot_renders_paginated_work_page() {
                 index: 0,
                 title: "exec".to_string(),
                 content: String::new(),
+                id: Some("call-1".to_string()),
                 status: Some("running".to_string()),
                 input: Some("{\"command\":[\"cargo\",\"test\"]}".to_string()),
                 output: None,
@@ -165,6 +166,7 @@ fn dashboard_snapshot_renders_paginated_work_page() {
                 index: 1,
                 title: "apply_patch".to_string(),
                 content: String::new(),
+                id: Some("call-2".to_string()),
                 status: Some("completed".to_string()),
                 input: Some("{\"path\":\"src/lib.rs\"}".to_string()),
                 output: Some("updated".to_string()),
@@ -172,10 +174,37 @@ fn dashboard_snapshot_renders_paginated_work_page() {
             },
         ],
         next_cursor: Some("2".to_string()),
+        plan_text: None,
     };
 
     insta::assert_snapshot!(
         "supervisor_dashboard_paginated_work_page",
+        render_params(work_page_params(page), 100)
+    );
+}
+
+#[test]
+fn dashboard_snapshot_renders_plan_text_and_checklist() {
+    let process_id = Uuid::from_u128(42902);
+    let page = WorkPage {
+        process_id,
+        section: WorkSection::Plan,
+        items: vec![WorkItem {
+            index: 0,
+            title: "plan step".to_string(),
+            content: "inspect the supervisor".to_string(),
+            id: None,
+            status: Some("inProgress".to_string()),
+            input: None,
+            output: None,
+            created_at: None,
+        }],
+        next_cursor: None,
+        plan_text: Some("1. inspect the supervisor\n2. report the result".to_string()),
+    };
+
+    insta::assert_snapshot!(
+        "supervisor_dashboard_plan_text_and_checklist",
         render_params(work_page_params(page), 100)
     );
 }

@@ -11,7 +11,8 @@ The builder creates a canonical Codex package directory:
 ├── codex-package.json
 ├── bin
 │   ├── <entrypoint>[.exe]
-│   └── codex-code-mode-host[.exe]
+│   ├── codex-code-mode-host[.exe]
+│   └── codex-supervisor[.exe]             # optional
 ├── codex-resources
 │   ├── bwrap                             # Linux only
 │   ├── zsh/bin/zsh                       # supported Unix targets only
@@ -54,6 +55,11 @@ binary instead of rebuilding it.
 
 Release jobs should likewise pass `--code-mode-host-bin` so the package contains
 the signed host executable beside the signed entrypoint.
+
+Release jobs that build the process supervisor should pass
+`--codex-supervisor-bin` so the package contains `codex-supervisor` beside the
+entrypoint. This is optional for package variants that do not ship the
+supervisor.
 
 Release jobs that already built package resource binaries should also pass the
 corresponding resource flags: `--bwrap-bin` for Linux packages, and

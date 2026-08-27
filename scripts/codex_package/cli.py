@@ -91,6 +91,14 @@ def parse_args() -> argparse.Namespace:
         ),
     )
     parser.add_argument(
+        "--codex-supervisor-bin",
+        type=Path,
+        help=(
+            "Optional prebuilt codex-supervisor executable. If provided, it is "
+            "placed beside the package entrypoint."
+        ),
+    )
+    parser.add_argument(
         "--bwrap-bin",
         type=Path,
         help=(
@@ -167,6 +175,11 @@ def main() -> int:
             "prebuilt code-mode host executable",
             "--code-mode-host-bin",
         ),
+        codex_supervisor_bin=resolve_optional_input_path(
+            args.codex_supervisor_bin,
+            "prebuilt codex-supervisor executable",
+            "--codex-supervisor-bin",
+        ),
         bwrap_bin=resolve_optional_input_path(
             args.bwrap_bin,
             "prebuilt Linux bwrap executable",
@@ -187,6 +200,7 @@ def main() -> int:
     inputs = PackageInputs(
         entrypoint_bin=source_outputs.entrypoint_bin,
         code_mode_host_bin=source_outputs.code_mode_host_bin,
+        codex_supervisor_bin=source_outputs.codex_supervisor_bin,
         rg_bin=resolve_rg_bin(spec, args.rg_bin),
         zsh_bin=resolve_zsh_bin(spec, args.zsh_manifest, zsh_bin=args.zsh_bin),
         bwrap_bin=source_outputs.bwrap_bin,
@@ -196,7 +210,11 @@ def main() -> int:
     prepare_package_dir(package_dir, force=args.force)
     build_package_dir(package_dir, version, variant, spec, inputs)
     validate_package_dir(
-        package_dir, variant, spec, include_zsh=inputs.zsh_bin is not None
+        package_dir,
+        variant,
+        spec,
+        include_zsh=inputs.zsh_bin is not None,
+        include_supervisor=inputs.codex_supervisor_bin is not None,
     )
 
     for archive_output in args.archive_output:

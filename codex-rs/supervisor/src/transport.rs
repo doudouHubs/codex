@@ -95,9 +95,29 @@ pub(crate) async fn connect_endpoint(endpoint: &Endpoint) -> Result<BoxedIo> {
     {
         let Endpoint::Windows(name) = endpoint;
         use tokio::net::windows::named_pipe::ClientOptions;
-        Ok(Box::new(ClientOptions::new().open(name).with_context(
-            || format!("failed to connect local IPC named pipe {name}"),
-        )?))
+        use tokio::time::Instant;
+        use tokio::time::sleep;
+        use windows_sys::Win32::Foundation::ERROR_PIPE_BUSY;
+
+        let deadline = Instant::now() + crate::REQUEST_TIMEOUT;
+        loop {
+            match ClientOptions::new().open(name) {
+                Ok(client) => return Ok(Box::new(client)),
+                Err(error)
+                    if error.raw_os_error() == Some(ERROR_PIPE_BUSY as i32)
+                        && Instant::now() < deadline =>
+                {
+                    // named pipe 的 server 会在请求结束后补建下一个实例；这段窗口内
+                    // Windows 返回 ERROR_PIPE_BUSY。它表示暂时没有空闲实例，不代表
+                    // supervisor 已退出，重试可以避免心跳把整个 worker 误判成失联。
+                    sleep(std::time::Duration::from_millis(10)).await;
+                }
+                Err(error) => {
+                    return Err(error)
+                        .with_context(|| format!("failed to connect local IPC named pipe {name}"));
+                }
+            }
+        }
     }
     #[cfg(not(any(unix, windows)))]
     unreachable!()
