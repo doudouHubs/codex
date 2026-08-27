@@ -31,7 +31,7 @@ async fn mouse_click_uses_rendered_bottom_pane_area() {
             kind: MouseEventKind::Down(MouseButton::Left),
             column: cursor_x.saturating_sub(2),
             row: cursor_y,
-            modifiers: KeyModifiers::NONE,
+            modifiers: KeyModifiers::CONTROL,
         },
     );
 

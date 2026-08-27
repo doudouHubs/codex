@@ -100,6 +100,12 @@ impl App {
                         overlay.set_history_state(TranscriptHistoryState::Failed);
                         tui.frame_requester().schedule_frame();
                     }
+                    if self.chat_widget.thread_id() == Some(thread_id)
+                        && self.main_transcript.is_some()
+                    {
+                        self.sync_main_transcript_history_state(TranscriptHistoryState::Failed);
+                        tui.frame_requester().schedule_frame();
+                    }
                     tracing::warn!(%thread_id, error = %err, "failed to load older transcript history");
                 }
             }
@@ -552,6 +558,13 @@ impl App {
                         t.consolidate_cells(start..end, consolidated.clone());
                         tui.frame_requester().schedule_frame();
                     }
+                    if self.main_transcript.is_some() {
+                        self.sync_main_transcript_consolidated_cell(
+                            start..end,
+                            consolidated.clone(),
+                        );
+                        tui.frame_requester().schedule_frame();
+                    }
 
                     self.finish_required_stream_reflow(tui)?;
                 } else {
@@ -559,6 +572,10 @@ impl App {
                     self.record_initial_history_replay_cell(consolidated.clone());
                     if let Some(Overlay::Transcript(t)) = &mut self.overlay {
                         t.insert_cell(consolidated.clone());
+                        tui.frame_requester().schedule_frame();
+                    }
+                    if self.main_transcript.is_some() {
+                        self.sync_main_transcript_inserted_cell(consolidated.clone());
                         tui.frame_requester().schedule_frame();
                     }
                     if self.should_render_initial_history_cell() {

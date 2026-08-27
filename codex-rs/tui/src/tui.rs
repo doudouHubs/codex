@@ -684,7 +684,7 @@ pub struct Tui {
     // Desired input modes are shared with Unix suspend/resume handling.
     alternate_scroll_enabled: Arc<AtomicBool>,
     mouse_capture_enabled: Arc<AtomicBool>,
-    // 将 surface 请求的捕获模式与 Ctrl 按住状态分离，保证只有按住 Ctrl 才物理捕获鼠标。
+    // 将 surface 请求的捕获模式与 Ctrl/Shift 按住状态分离，保证普通聊天区仅在修饰键按住时物理捕获鼠标。
     mouse_capture_state: MouseCaptureState,
     // Keeps unmanaged process stderr writes out of the inline viewport.
     _stderr_guard: terminal_stderr::TerminalStderrGuard,
@@ -960,8 +960,8 @@ impl Tui {
 
     /// Register the main chat surface's mouse-capture request.
     ///
-    /// The terminal is physically captured only while Ctrl is held. This keeps native terminal
-    /// selection and scrolling available by default while still allowing click-to-position input.
+    /// The terminal is physically captured only while Ctrl or Shift is held. This keeps native
+    /// terminal selection and scrolling available by default while still allowing TUI gestures.
     pub fn enable_mouse_capture(&mut self) -> Result<()> {
         self.set_mouse_capture_mode(MouseCaptureMode::CtrlHeld)
     }
@@ -979,7 +979,7 @@ impl Tui {
         self.set_mouse_capture_mode(MouseCaptureMode::Disabled)
     }
 
-    /// Handle a standalone Ctrl key so mouse capture is available only while it is held.
+    /// Handle standalone Ctrl/Shift keys so mouse capture is available only while either is held.
     ///
     /// The keyboard enhancement protocol reports modifier keys as distinct press/release events.
     /// Keeping this transition in `Tui` lets ordinary surface changes update their request without
@@ -996,19 +996,31 @@ impl Tui {
     pub(crate) fn sync_mouse_capture_from_os(&mut self) {
         use windows_sys::Win32::UI::Input::KeyboardAndMouse::GetAsyncKeyState;
         use windows_sys::Win32::UI::Input::KeyboardAndMouse::VK_LCONTROL;
+        use windows_sys::Win32::UI::Input::KeyboardAndMouse::VK_LSHIFT;
         use windows_sys::Win32::UI::Input::KeyboardAndMouse::VK_RCONTROL;
+        use windows_sys::Win32::UI::Input::KeyboardAndMouse::VK_RSHIFT;
 
-        let mut control_keys_pressed = 0;
+        let mut modifier_keys_pressed = 0;
         if unsafe { GetAsyncKeyState(VK_LCONTROL as i32) } < 0 {
-            control_keys_pressed |= 1;
+            modifier_keys_pressed |= 1;
         }
         if unsafe { GetAsyncKeyState(VK_RCONTROL as i32) } < 0 {
-            control_keys_pressed |= 2;
+            modifier_keys_pressed |= 2;
+        }
+        if unsafe { GetAsyncKeyState(VK_LSHIFT as i32) } < 0 {
+            modifier_keys_pressed |= 4;
+        }
+        if unsafe { GetAsyncKeyState(VK_RSHIFT as i32) } < 0 {
+            modifier_keys_pressed |= 8;
         }
         let action = self
             .mouse_capture_state
-            .sync_control_key_mask(control_keys_pressed);
+            .sync_control_key_mask(modifier_keys_pressed);
         self.apply_mouse_capture_action(action);
+    }
+
+    pub(crate) fn shift_is_pressed(&self) -> bool {
+        self.mouse_capture_state.shift_is_pressed()
     }
 
     fn apply_mouse_capture_action(&mut self, action: MouseCaptureAction) {
@@ -1018,7 +1030,7 @@ impl Tui {
             MouseCaptureAction::Enable => self.enable_mouse_capture_now(),
         };
         if let Err(err) = result {
-            tracing::warn!(error = %err, "failed to update terminal mouse capture for Ctrl selection");
+            tracing::warn!(error = %err, "failed to update terminal mouse capture for TUI mouse gestures");
         }
     }
 

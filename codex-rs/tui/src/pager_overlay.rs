@@ -380,6 +380,24 @@ impl PagerView {
         };
     }
 
+    fn scroll_lines(
+        &mut self,
+        direction: ScrollDirection,
+        lines: usize,
+        width: u16,
+        viewport_height: u16,
+    ) {
+        // usize::MAX 是“跟随底部”的哨兵值。滚轮第一次向上时必须先还原为真实底部，
+        // 再扣除步长，否则下一次渲染会把 MAX-3 再次钳回底部，用户看不到任何移动。
+        let content_height = self.content_height(width);
+        let max_scroll = content_height.saturating_sub(usize::from(viewport_height));
+        let current = self.scroll_offset.min(max_scroll);
+        self.scroll_offset = match direction {
+            ScrollDirection::Up => current.saturating_sub(lines),
+            ScrollDirection::Down => current.saturating_add(lines).min(max_scroll),
+        };
+    }
+
     fn scroll_to(&mut self, destination: ScrollDestination) {
         self.scroll_offset = match destination {
             ScrollDestination::Top => 0,
@@ -931,6 +949,23 @@ impl TranscriptOverlay {
 
     pub(crate) fn scroll_line(&mut self, direction: ScrollDirection) {
         self.view.scroll_line(direction);
+    }
+
+    pub(crate) fn scroll_lines(
+        &mut self,
+        direction: ScrollDirection,
+        lines: usize,
+        width: u16,
+        viewport_height: u16,
+    ) {
+        self.view
+            .scroll_lines(direction, lines, width, viewport_height);
+    }
+
+    pub(crate) fn is_scrolled_to_top(&self, width: u16, viewport_height: u16) -> bool {
+        let content_height = self.view.content_height(width);
+        let max_scroll = content_height.saturating_sub(usize::from(viewport_height));
+        self.view.scroll_offset.min(max_scroll) == 0
     }
 
     pub(crate) fn scroll_to(&mut self, destination: ScrollDestination) {

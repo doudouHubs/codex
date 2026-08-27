@@ -756,6 +756,9 @@ impl App {
         if let Some(Overlay::Transcript(overlay)) = &mut self.overlay {
             overlay.replace_cells(self.transcript_cells.clone());
         }
+        if self.main_transcript.is_some() {
+            self.sync_main_transcript_replaced_cells();
+        }
     }
 }
 

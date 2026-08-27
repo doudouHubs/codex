@@ -159,25 +159,20 @@ fn create_shell_wrapper(shell: ShellKind, command: &str) -> io::Result<PathBuf> 
         .suffix(".cmd")
         .tempfile()?
         .into_temp_path();
-    let wrapper_path = temp_path.to_path_buf();
-    let content = build_shell_wrapper_content(shell, command, &wrapper_path);
+    let content = build_shell_wrapper_content(shell, command);
     fs::write(&temp_path, content)?;
     temp_path
         .keep()
         .map_err(|error| io::Error::other(format!("failed to keep terminal wrapper: {error}")))
 }
 
-fn build_shell_wrapper_content(shell: ShellKind, command: &str, wrapper_path: &Path) -> String {
+fn build_shell_wrapper_content(shell: ShellKind, command: &str) -> String {
     match shell {
         ShellKind::Cmd => {
-            format!("@echo off\r\n{command}\r\ndel /f /q \"%~f0\" >nul 2>&1\r\ncmd.exe /d /k\r\n")
+            format!("@echo off\r\n{command}\r\ncmd.exe /d /k\r\n")
         }
         ShellKind::WindowsPowerShell | ShellKind::PowerShellCore => {
-            let script = format!(
-                "try {{\r\n{command}\r\n}} finally {{\r\nRemove-Item -LiteralPath '{}' -Force -ErrorAction SilentlyContinue\r\n}}",
-                escape_powershell_single_quoted(&wrapper_path.to_string_lossy())
-            );
-            let encoded_command = encode_powershell_command(&script);
+            let encoded_command = encode_powershell_command(command);
             format!(
                 "@echo off\r\ncall {} -NoExit -EncodedCommand {encoded_command}\r\n",
                 quote_cmd_argument(&shell_program(shell))
@@ -192,10 +187,6 @@ fn encode_powershell_command(command: &str) -> String {
         .flat_map(u16::to_le_bytes)
         .collect::<Vec<_>>();
     STANDARD.encode(bytes)
-}
-
-fn escape_powershell_single_quoted(value: &str) -> String {
-    value.replace('\'', "''")
 }
 
 fn quote_cmd_argument(path: &Path) -> String {

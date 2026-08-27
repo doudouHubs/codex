@@ -39,6 +39,10 @@ impl App {
             if let Some(Overlay::Transcript(t)) = &mut self.overlay {
                 t.insert_cell(cell.clone());
             }
+            if self.main_transcript.is_some() {
+                self.sync_main_transcript_inserted_cell(cell.clone());
+                tui.frame_requester().schedule_frame();
+            }
             self.transcript_cells.push(cell.clone());
             self.record_initial_history_replay_cell(cell);
         }
@@ -69,6 +73,10 @@ impl App {
 
             if let Some(Overlay::Transcript(t)) = &mut self.overlay {
                 t.consolidate_cells(start..end, consolidated.clone());
+                tui.frame_requester().schedule_frame();
+            }
+            if self.main_transcript.is_some() {
+                self.sync_main_transcript_consolidated_cell(start..end, consolidated.clone());
                 tui.frame_requester().schedule_frame();
             }
 

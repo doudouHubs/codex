@@ -4,6 +4,7 @@
 //! the focused app submodules.
 
 use crate::AppServerTarget;
+use crate::app::main_transcript::MainTranscriptViewport;
 use crate::app_backtrack::BacktrackState;
 use crate::app_command::AppCommand;
 use crate::app_event::AppEvent;
@@ -176,6 +177,7 @@ use crossterm::event::KeyCode;
 use crossterm::event::KeyEvent;
 use crossterm::event::KeyEventKind;
 use crossterm::event::KeyModifiers;
+use crossterm::event::ModifierKeyCode;
 use ratatui::backend::Backend;
 use ratatui::layout::Rect;
 use ratatui::layout::Size;
@@ -219,6 +221,7 @@ mod history_pagination;
 mod history_ui;
 mod input;
 mod loaded_threads;
+mod main_transcript;
 mod overlay;
 mod pending_interactive_replay;
 mod pets;
@@ -554,6 +557,9 @@ pub(crate) struct App {
 
     // Pager overlay state (Transcript or Static like Diff)
     pub(crate) overlay: Option<Overlay>,
+    /// Temporary Shift+wheel transcript surface; mutually exclusive with the pager overlay and
+    /// rules sidebar, while still retaining the main composer.
+    main_transcript: Option<MainTranscriptViewport>,
     /// Interactive rules surface; mutually exclusive with `overlay` but non-exclusive for input.
     rules_sidebar: Option<RulesSidebarState>,
     rules_sidebar_generation: u64,
@@ -781,11 +787,23 @@ impl App {
             self.handle_draw_pre_render(tui, screen_size)?;
         }
 
-        // Ctrl 的独立按下/释放事件必须在 overlay、侧栏和 composer 分流前消费；否则某个
-        // surface 的恢复逻辑可能在用户仍按住 Ctrl 时重新打开终端鼠标捕获。
+        // Ctrl/Shift 的独立按下/释放事件必须在 overlay、侧栏和 composer 分流前消费；否则某个
+        // surface 的恢复逻辑可能在用户仍按住修饰键时重新打开终端鼠标捕获。
         if let TuiEvent::Key(key_event) = &event
             && tui.handle_control_mouse_capture_event(key_event)
         {
+            if matches!(
+                key_event,
+                KeyEvent {
+                    code: KeyCode::Modifier(
+                        ModifierKeyCode::LeftShift | ModifierKeyCode::RightShift,
+                    ),
+                    kind: KeyEventKind::Release,
+                    ..
+                }
+            ) {
+                self.close_main_transcript_viewport(tui);
+            }
             return Ok(AppRunControl::Continue);
         }
 
@@ -806,6 +824,11 @@ impl App {
                 .handle_backtrack_overlay_event(tui, app_server, event)
                 .await?;
         } else {
+            if let TuiEvent::Mouse(mouse_event) = &event
+                && self.handle_main_transcript_mouse(tui, app_server, mouse_event.clone())?
+            {
+                return Ok(AppRunControl::Continue);
+            }
             match event {
                 TuiEvent::Key(key_event) => {
                     self.handle_key_event(tui, app_server, key_event).await;
@@ -892,6 +915,9 @@ impl App {
     }
 
     fn render_chat_widget_frame(&mut self, tui: &mut tui::Tui, screen_size: Size) -> Result<Rect> {
+        if self.main_transcript_viewport_active() {
+            return self.render_main_transcript_frame(tui, screen_size);
+        }
         self.with_chat_widget_frame(screen_size.width, |desired_height, chat_widget| {
             let mut rendered_area = Rect::default();
             tui.draw_with_resize_reflow(desired_height, screen_size, |frame| {

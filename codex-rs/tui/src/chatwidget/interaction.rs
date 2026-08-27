@@ -86,6 +86,13 @@ impl ChatWidget {
         if !matches!(event.kind, MouseEventKind::Down(MouseButton::Left)) {
             return;
         }
+        // 普通点击交还给终端原生选择；只有 Ctrl+左键才允许 TUI 改写 composer 光标，
+        // 并明确排除 Shift 组合，避免 Shift+滚轮捕获期间误触输入框定位。
+        if !event.modifiers.contains(KeyModifiers::CONTROL)
+            || event.modifiers.contains(KeyModifiers::SHIFT)
+        {
+            return;
+        }
 
         // 视图层拥有弹窗和模态交互；主 composer 只能在没有活动 view 时接收点击，避免事件
         // 穿透到底层输入框而改变用户当前正在处理的审批或选择界面。

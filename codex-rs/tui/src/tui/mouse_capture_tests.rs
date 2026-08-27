@@ -45,6 +45,33 @@ fn control_enables_capture_until_the_last_control_is_released() {
 }
 
 #[test]
+fn shift_enables_capture_and_reports_its_held_state() {
+    let mut state = MouseCaptureState::default();
+    assert_eq!(
+        state.set_mode(MouseCaptureMode::CtrlHeld),
+        MouseCaptureAction::Ignore
+    );
+
+    assert_eq!(
+        state.handle_control_key(&control_event(
+            ModifierKeyCode::LeftShift,
+            KeyEventKind::Press,
+        )),
+        Some(MouseCaptureAction::Enable)
+    );
+    assert!(state.shift_is_pressed());
+    assert!(state.capture_required());
+    assert_eq!(
+        state.handle_control_key(&control_event(
+            ModifierKeyCode::LeftShift,
+            KeyEventKind::Release,
+        )),
+        Some(MouseCaptureAction::Disable)
+    );
+    assert!(!state.shift_is_pressed());
+}
+
+#[test]
 fn repeated_and_duplicate_control_events_do_not_toggle_capture_twice() {
     let mut state = MouseCaptureState::default();
     assert_eq!(
@@ -177,6 +204,23 @@ fn polled_control_state_enables_and_disables_capture() {
         MouseCaptureAction::Ignore
     );
     assert_eq!(state.sync_control_key_mask(0), MouseCaptureAction::Disable);
+}
+
+#[test]
+fn polled_shift_state_enables_and_disables_capture() {
+    let mut state = MouseCaptureState::default();
+    assert_eq!(
+        state.set_mode(MouseCaptureMode::CtrlHeld),
+        MouseCaptureAction::Ignore
+    );
+
+    assert_eq!(
+        state.sync_control_key_mask(LEFT_SHIFT),
+        MouseCaptureAction::Enable
+    );
+    assert!(state.shift_is_pressed());
+    assert_eq!(state.sync_control_key_mask(0), MouseCaptureAction::Disable);
+    assert!(!state.shift_is_pressed());
 }
 
 #[test]

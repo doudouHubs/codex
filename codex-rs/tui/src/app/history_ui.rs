@@ -27,6 +27,10 @@ impl App {
             t.insert_cell(cell.clone());
             tui.frame_requester().schedule_frame();
         }
+        if self.main_transcript.is_some() {
+            self.sync_main_transcript_inserted_cell(cell.clone());
+            tui.frame_requester().schedule_frame();
+        }
         self.transcript_cells.push(cell.clone());
         if !self.should_render_initial_history_cell() {
             // 旧 turn 只跳过主屏展示；transcript 和已打开的 overlay 仍必须保留完整 cell。
@@ -93,7 +97,10 @@ impl App {
             return Ok(());
         }
 
-        if self.overlay.is_some() || self.initial_history_replay_buffer.is_some() {
+        if self.overlay.is_some()
+            || self.main_transcript.is_some()
+            || self.initial_history_replay_buffer.is_some()
+        {
             self.pending_thread_usage_history_refresh = true;
             return Ok(());
         }
@@ -279,6 +286,9 @@ impl App {
         tui: &mut tui::Tui,
         redraw_header: bool,
     ) -> Result<()> {
+        if self.main_transcript.is_some() {
+            self.close_main_transcript_viewport(tui);
+        }
         let is_alt_screen_active = tui.is_alt_screen_active();
 
         // Drop queued history insertions so stale transcript lines cannot be flushed after /clear.
@@ -313,6 +323,7 @@ impl App {
 
     pub(super) fn reset_transcript_state_after_clear(&mut self) {
         self.overlay = None;
+        self.main_transcript = None;
         self.transcript_cells.clear();
         self.last_rendered_history_tail = None;
         self.last_thread_usage_status_cell = None;

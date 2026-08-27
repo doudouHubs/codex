@@ -102,6 +102,35 @@ impl ChatWidget {
             .cursor_style_with_composer_right_reserve(area, /*composer_right_reserve*/ 0)
     }
 
+    pub(crate) fn main_transcript_bottom_pane_height(&self, width: u16) -> u16 {
+        self.bottom_pane.desired_height_with_composer_right_reserve(
+            width,
+            self.ambient_pet_wrap_reserved_cols(),
+        )
+    }
+
+    pub(crate) fn render_main_transcript_bottom_pane(&self, area: Rect, buf: &mut Buffer) {
+        // 主 transcript 临时视口只替换上方历史区，底部仍复用主 composer 的右侧预留和状态布局。
+        self.bottom_pane.render_with_composer_right_reserve(
+            area,
+            buf,
+            self.ambient_pet_wrap_reserved_cols(),
+        );
+    }
+
+    pub(crate) fn main_transcript_cursor_pos(&self, area: Rect) -> Option<(u16, u16)> {
+        self.bottom_pane
+            .cursor_pos_with_composer_right_reserve(area, self.ambient_pet_wrap_reserved_cols())
+    }
+
+    pub(crate) fn main_transcript_cursor_style(
+        &self,
+        area: Rect,
+    ) -> crossterm::cursor::SetCursorStyle {
+        self.bottom_pane
+            .cursor_style_with_composer_right_reserve(area, self.ambient_pet_wrap_reserved_cols())
+    }
+
     pub(crate) fn note_rendered_width(&self, width: u16) {
         self.last_rendered_width.set(Some(width));
     }

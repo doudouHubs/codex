@@ -11,7 +11,7 @@ const RULES_POLL_INTERVAL: Duration = Duration::from_secs(2);
 
 impl App {
     pub(super) fn alt_screen_surface_active(&self) -> bool {
-        self.overlay.is_some() || self.rules_sidebar.is_some()
+        self.overlay.is_some() || self.rules_sidebar.is_some() || self.main_transcript.is_some()
     }
 
     pub(super) fn open_rules_sidebar(&mut self, tui: &mut tui::Tui) {
@@ -22,6 +22,9 @@ impl App {
             );
             return;
         };
+        if self.main_transcript.is_some() {
+            self.close_main_transcript_viewport(tui);
+        }
         // sidebar 不拥有键盘焦点，禁用 wheel->arrow 转换，避免滚轮误触 composer 输入历史。
         let _ = tui.enter_alt_screen_without_alternate_scroll();
         // 侧栏关闭 alternate-scroll 后，普通滚轮必须以 MouseEvent 进入应用，不能等 Ctrl 捕获。

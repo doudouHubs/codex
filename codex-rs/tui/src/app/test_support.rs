@@ -38,6 +38,7 @@ pub(super) async fn make_test_app() -> App {
         last_thread_usage_status_cell: None,
         pending_thread_usage_history_refresh: false,
         overlay: None,
+        main_transcript: None,
         rules_sidebar: None,
         rules_sidebar_generation: 0,
         deferred_history_lines: Vec::new(),

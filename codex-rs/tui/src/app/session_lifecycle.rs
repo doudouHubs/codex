@@ -567,6 +567,9 @@ impl App {
     }
 
     pub(super) fn reset_for_thread_switch(&mut self, tui: &mut tui::Tui) -> Result<()> {
+        if self.main_transcript.is_some() {
+            self.close_main_transcript_viewport(tui);
+        }
         self.reset_transcript_state_after_clear();
         tui.clear_pending_history_lines();
         Self::clear_terminal_for_thread_switch(&mut tui.terminal)?;

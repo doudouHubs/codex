@@ -413,6 +413,7 @@ See the Codex keymap documentation for supported actions and examples."
             last_thread_usage_status_cell: None,
             pending_thread_usage_history_refresh: false,
             overlay: None,
+            main_transcript: None,
             rules_sidebar: None,
             rules_sidebar_generation: 0,
             deferred_history_lines: Vec::new(),
@@ -550,7 +551,7 @@ See the Codex keymap documentation for supported actions and examples."
         if let Err(err) = render_startup_frame(&mut app, tui) {
             return shutdown_on_startup_error(app_server, err).await;
         }
-        // 主聊天区需要登记鼠标捕获请求；物理捕获仍只在 Ctrl 按住期间开启，保留终端原生划选。
+        // 主聊天区需要登记鼠标捕获请求；物理捕获仍只在 Ctrl 或 Shift 按住期间开启，保留终端原生划选。
         tui.enable_mouse_capture()?;
         let tui_events = tui.event_stream();
         tokio::pin!(tui_events);
@@ -702,7 +703,12 @@ See the Codex keymap documentation for supported actions and examples."
                     }
                     _ = mouse_capture_poll.tick(), if cfg!(windows) => {
                         #[cfg(windows)]
-                        tui.sync_mouse_capture_from_os();
+                        {
+                            tui.sync_mouse_capture_from_os();
+                            if app.main_transcript_viewport_active() && !tui.shift_is_pressed() {
+                                app.close_main_transcript_viewport(tui);
+                            }
+                        }
                         AppRunControl::Continue
                     }
                 };

@@ -7,7 +7,6 @@ use super::build_direct_shell_spec;
 use super::build_shell_wrapper_content;
 use super::build_windows_terminal_spec;
 use super::encode_powershell_command;
-use super::escape_powershell_single_quoted;
 use super::shell_kind_from_process_name;
 use super::shell_program;
 use super::windows_terminal_program;
@@ -58,35 +57,31 @@ fn windows_terminal_spec_uses_single_wrapper_without_fixed_window() {
 #[test]
 fn powershell_wrapper_encodes_command_and_keeps_shell_open() {
     let command = "Write-Host '中文' | Out-Host";
-    let wrapper = PathBuf::from(r"C:\Temp\codex-wrapper.cmd");
-    let content = build_shell_wrapper_content(ShellKind::PowerShellCore, command, &wrapper);
-    let script = format!(
-        "try {{\r\n{command}\r\n}} finally {{\r\nRemove-Item -LiteralPath '{}' -Force -ErrorAction SilentlyContinue\r\n}}",
-        escape_powershell_single_quoted(&wrapper.to_string_lossy())
-    );
-    let encoded = encode_powershell_command(&script);
+    let content = build_shell_wrapper_content(ShellKind::PowerShellCore, command);
+    let encoded = encode_powershell_command(command);
 
     assert!(content.contains("-NoExit -EncodedCommand"));
     assert!(content.contains(&encoded));
     assert!(!content.contains(command));
+    assert!(!content.contains("Remove-Item"));
+    assert!(!content.contains("try"));
+    assert!(!content.contains("finally"));
 
     let bytes = STANDARD.decode(encoded).expect("valid PowerShell encoding");
     let units = bytes
         .chunks_exact(2)
         .map(|chunk| u16::from_le_bytes([chunk[0], chunk[1]]))
         .collect::<Vec<_>>();
-    assert_eq!(String::from_utf16(&units).expect("valid UTF-16"), script);
+    assert_eq!(String::from_utf16(&units).expect("valid UTF-16"), command);
 }
 
 #[test]
 fn cmd_wrapper_runs_command_then_keeps_cmd_open() {
-    let wrapper = PathBuf::from(r"C:\Temp\codex-wrapper.cmd");
-    let content = build_shell_wrapper_content(ShellKind::Cmd, "echo ready", &wrapper);
+    let content = build_shell_wrapper_content(ShellKind::Cmd, "echo ready");
 
-    assert_eq!(
-        content,
-        "@echo off\r\necho ready\r\ndel /f /q \"%~f0\" >nul 2>&1\r\ncmd.exe /d /k\r\n"
-    );
+    assert_eq!(content, "@echo off\r\necho ready\r\ncmd.exe /d /k\r\n");
+    assert!(!content.contains("del /f"));
+    assert!(!content.contains("%~f0"));
 }
 
 #[test]

@@ -180,6 +180,9 @@ impl App {
                 if let Some(Overlay::Transcript(overlay)) = self.overlay.as_mut() {
                     overlay.replace_cells(self.transcript_cells.clone());
                 }
+                if self.main_transcript.is_some() {
+                    self.sync_main_transcript_replaced_cells();
+                }
             }
         }
         items.retain(|item| !hidden_item_ids.contains(item.id()));
@@ -228,6 +231,14 @@ impl App {
             });
             continue_to_start = previous_state == TranscriptHistoryState::LoadingBeginning
                 && self.scrollback_has_older_history;
+        } else if self.main_transcript.is_some() {
+            let index = self.sync_main_transcript_prepended_cells(cells.clone(), width);
+            self.transcript_cells.splice(index..index, cells);
+            self.sync_main_transcript_history_state(if self.scrollback_has_older_history {
+                TranscriptHistoryState::Partial
+            } else {
+                TranscriptHistoryState::Complete
+            });
         } else {
             let index = self
                 .transcript_cells
