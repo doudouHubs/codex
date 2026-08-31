@@ -9,12 +9,12 @@ expression: "render_params(snapshot_params_for_pid(snapshot, SNAPSHOT_CURRENT_PI
   1. Refresh process list     Supervisor PID 900 | 4 registered process(es)                         
 › 2. TUI PID <current-pid> (current)  status: running | activity: idle | mode: default | summary: - |       
                               error: - | cwd: /workspace/<current-pid> | thread: thread-current |           
-                              heartbeat: 200                                                        
+                              observed: 200                                                         
   3. TUI PID 42901            status: running | activity: idle | mode: default | summary: - |       
                               error: - | cwd: /workspace/42901 | thread: thread-running |           
-                              heartbeat: 200                                                        
+                              observed: 200                                                         
   4. CLI PID 42902            status: unresponsive | activity: idle | mode: default | summary: - |  
-                              error: - | cwd: /workspace/42902 | thread: - | heartbeat: 200         
+                              error: - | cwd: /workspace/42902 | thread: - | observed: 200          
   5. TUI PID 42903            status: stopping | activity: idle | mode: default | summary: - |      
                               error: - | cwd: /workspace/42903 | thread: thread-stopping |          
-                              heartbeat: 200
+                              observed: 200

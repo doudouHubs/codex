@@ -1,5 +1,4 @@
 use crate::DAEMON_ARG;
-use crate::HEARTBEAT_INTERVAL;
 use crate::REQUEST_TIMEOUT;
 use crate::START_TIMEOUT;
 use crate::SUPERVISOR_DIR_NAME;
@@ -29,7 +28,6 @@ use std::path::PathBuf;
 use std::process::Stdio;
 #[cfg(not(windows))]
 use tokio::process::Command;
-use tokio::task::JoinHandle;
 use tokio::time::sleep;
 use tokio::time::timeout;
 use uuid::Uuid;
@@ -39,7 +37,6 @@ pub struct SupervisorLease {
     client: SupervisorClient,
     id: Uuid,
     lease_token: Uuid,
-    heartbeat_task: Option<JoinHandle<()>>,
     control_server: Option<WorkerControlServer>,
     reporter: SupervisorReporter,
 }
@@ -65,11 +62,8 @@ impl SupervisorLease {
         self.reporter.clone()
     }
 
-    /// 主动撤销租约。正常退出应调用此方法，异常退出则由 supervisor 的超时清理兜底。
+    /// 主动撤销租约。正常退出应调用此方法，异常退出则由下一次按需查询识别。
     pub async fn close(&mut self) -> Result<()> {
-        if let Some(task) = self.heartbeat_task.take() {
-            task.abort();
-        }
         let result = self.client.unregister(self.id, self.lease_token).await;
         if let Some(control_server) = self.control_server.take() {
             control_server.close().await;
@@ -80,9 +74,6 @@ impl SupervisorLease {
 
 impl Drop for SupervisorLease {
     fn drop(&mut self) {
-        if let Some(task) = self.heartbeat_task.take() {
-            task.abort();
-        }
         if let Some(a) = self.control_server.take() {
             drop(a)
         }
@@ -254,7 +245,7 @@ impl SupervisorClient {
         })
     }
 
-    /// 注册当前进程并启动后台心跳。
+    /// 注册当前进程并启动 worker 控制服务。
     pub async fn register_current_process(
         &self,
         kind: crate::ProcessKind,
@@ -302,33 +293,31 @@ impl SupervisorClient {
                 return Err(error);
             }
         };
-        let Response::Registered { id, lease_token } = response else {
+        let Response::Registered {
+            id,
+            lease_token,
+            protocol_version,
+        } = response
+        else {
             control_server.close().await;
             bail!("supervisor returned an invalid register response");
         };
+        if protocol_version != Some(crate::PROTOCOL_VERSION) {
+            // 新版 worker 不能连接旧版 supervisor：旧 daemon 仍依赖已删除的租约维护机制，
+            // 最终可能把一个正常 worker 误判为失联并终止。注册成功后立即注销，
+            // 将版本漂移转换为可读的启动错误，而不是延迟到运行中崩溃。
+            let _ = self.unregister(id, lease_token).await;
+            control_server.close().await;
+            bail!(
+                "incompatible codex supervisor protocol: expected {}, got {protocol_version:?}",
+                crate::PROTOCOL_VERSION
+            );
+        }
         crate::reporter::install_current_reporter(reporter.clone());
-
-        let heartbeat_client = self.clone();
-        let heartbeat_reporter = reporter.clone();
-        let heartbeat_task = tokio::spawn(async move {
-            loop {
-                sleep(HEARTBEAT_INTERVAL).await;
-                if let Err(error) = heartbeat_client
-                    .heartbeat(id, lease_token, heartbeat_reporter.status())
-                    .await
-                {
-                    // 租约失效时继续运行会产生 dashboard 幽灵进程，也会破坏 supervisor 的唯一 owner
-                    // 约束，因此这里直接结束 worker，而不是静默降级成未托管模式。
-                    eprintln!("codex supervisor heartbeat failed: {error:#}");
-                    std::process::exit(1);
-                }
-            }
-        });
         Ok(SupervisorLease {
             client: self.clone(),
             id,
             lease_token,
-            heartbeat_task: Some(heartbeat_task),
             control_server: Some(control_server),
             reporter: reporter.clone(),
         })
@@ -362,6 +351,13 @@ impl SupervisorClient {
         let Response::Snapshot(snapshot) = response else {
             bail!("supervisor returned an invalid list response");
         };
+        if snapshot.protocol_version != crate::PROTOCOL_VERSION {
+            bail!(
+                "incompatible codex supervisor protocol: expected {}, got {}",
+                crate::PROTOCOL_VERSION,
+                snapshot.protocol_version
+            );
+        }
         Ok(snapshot)
     }
 
@@ -401,26 +397,6 @@ impl SupervisorClient {
         let response = self.call(Request::Ping).await?;
         if !matches!(response, Response::Pong) {
             bail!("supervisor returned an invalid ping response");
-        }
-        Ok(())
-    }
-
-    async fn heartbeat(
-        &self,
-        id: Uuid,
-        lease_token: Uuid,
-        status: crate::WorkerStatus,
-    ) -> Result<()> {
-        let response = self
-            .call(Request::Heartbeat {
-                id,
-                lease_token,
-                now: crate::unix_seconds(),
-                status,
-            })
-            .await?;
-        if !matches!(response, Response::Ack) {
-            bail!("supervisor returned an invalid heartbeat response");
         }
         Ok(())
     }

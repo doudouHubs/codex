@@ -825,7 +825,7 @@ impl App {
                 .await?;
         } else {
             if let TuiEvent::Mouse(mouse_event) = &event
-                && self.handle_main_transcript_mouse(tui, app_server, mouse_event.clone())?
+                && self.handle_main_transcript_mouse(tui, app_server, *mouse_event)?
             {
                 return Ok(AppRunControl::Continue);
             }

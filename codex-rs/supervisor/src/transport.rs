@@ -123,6 +123,61 @@ pub(crate) async fn connect_endpoint(endpoint: &Endpoint) -> Result<BoxedIo> {
     unreachable!()
 }
 
+#[cfg(windows)]
+pub(crate) fn create_named_pipe_server(
+    name: &str,
+    first_instance: bool,
+) -> std::io::Result<tokio::net::windows::named_pipe::NamedPipeServer> {
+    use std::ptr::null_mut;
+    use tokio::net::windows::named_pipe::ServerOptions;
+    use windows_sys::Win32::Foundation::GetLastError;
+    use windows_sys::Win32::Foundation::HLOCAL;
+    use windows_sys::Win32::Foundation::LocalFree;
+    use windows_sys::Win32::Security::Authorization::ConvertStringSecurityDescriptorToSecurityDescriptorW;
+    use windows_sys::Win32::Security::Authorization::SDDL_REVISION_1;
+    use windows_sys::Win32::Security::PSECURITY_DESCRIPTOR;
+    use windows_sys::Win32::Security::SECURITY_ATTRIBUTES;
+
+    // 受限 token 需要能够打开由普通用户创建的 pipe；调用方仍必须通过随机 token
+    // 完成协议认证，且 ServerOptions 默认拒绝远程客户端，所以这里只放宽本机句柄
+    // 访问，不等于放宽 Supervisor 的操作权限。
+    let sddl: Vec<u16> = "D:P(A;;GA;;;WD)\0".encode_utf16().collect();
+    let mut descriptor: PSECURITY_DESCRIPTOR = null_mut();
+    let converted = unsafe {
+        ConvertStringSecurityDescriptorToSecurityDescriptorW(
+            sddl.as_ptr(),
+            SDDL_REVISION_1,
+            &mut descriptor,
+            null_mut(),
+        )
+    };
+    if converted == 0 {
+        return Err(std::io::Error::from_raw_os_error(unsafe {
+            GetLastError() as i32
+        }));
+    }
+
+    let mut attributes = SECURITY_ATTRIBUTES {
+        nLength: std::mem::size_of::<SECURITY_ATTRIBUTES>() as u32,
+        lpSecurityDescriptor: descriptor,
+        bInheritHandle: 0,
+    };
+    let mut options = ServerOptions::new();
+    if first_instance {
+        options.first_pipe_instance(true);
+    }
+    let result = unsafe {
+        options.create_with_security_attributes_raw(
+            name,
+            &mut attributes as *mut SECURITY_ATTRIBUTES as *mut std::ffi::c_void,
+        )
+    };
+    unsafe {
+        LocalFree(descriptor as HLOCAL);
+    }
+    result
+}
+
 pub(crate) trait AsyncIo: AsyncRead + AsyncWrite {}
 impl<T: AsyncRead + AsyncWrite> AsyncIo for T {}
 pub(crate) type BoxedIo = Box<dyn AsyncIo + Unpin + Send>;

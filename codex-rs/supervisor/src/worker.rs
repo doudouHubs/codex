@@ -66,14 +66,13 @@ impl WorkerControlServer {
             let Endpoint::Windows(name) = endpoint;
             let task = tokio::spawn(async move {
                 loop {
-                    let server =
-                        match tokio::net::windows::named_pipe::ServerOptions::new().create(&name) {
-                            Ok(server) => server,
-                            Err(error) => {
-                                eprintln!("failed to create worker control pipe: {error}");
-                                return;
-                            }
-                        };
+                    let server = match crate::transport::create_named_pipe_server(&name, false) {
+                        Ok(server) => server,
+                        Err(error) => {
+                            eprintln!("failed to create worker control pipe: {error}");
+                            return;
+                        }
+                    };
                     if server.connect().await.is_err() {
                         return;
                     }
@@ -125,6 +124,7 @@ where
         return Ok(());
     }
     let response = match envelope.request {
+        WorkerRequest::ReadStatus => WorkerResponse::Status(reporter.status()),
         WorkerRequest::ReadWork(request) => reporter
             .page(
                 request.id,

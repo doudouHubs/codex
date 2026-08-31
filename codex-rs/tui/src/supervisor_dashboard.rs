@@ -397,7 +397,7 @@ fn process_description(record: &ProcessRecord) -> String {
     let summary = record.summary.as_deref().unwrap_or("-");
     let error = record.error.as_deref().unwrap_or("-");
     format!(
-        "status: {} | activity: {} | mode: {} | summary: {} | error: {} | cwd: {} | thread: {} | heartbeat: {}",
+        "status: {} | activity: {} | mode: {} | summary: {} | error: {} | cwd: {} | thread: {} | observed: {}",
         status_label(record.status),
         activity_label(record.activity),
         mode_label(record.mode),
@@ -405,7 +405,7 @@ fn process_description(record: &ProcessRecord) -> String {
         error,
         record.cwd.display(),
         thread_id,
-        record.last_heartbeat_at
+        record.last_observed_at
     )
 }
 

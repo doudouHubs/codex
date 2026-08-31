@@ -1097,7 +1097,7 @@ impl ChatWidget {
         &mut self,
         params: crate::bottom_pane::SelectionViewParams,
     ) {
-        // 刷新结果优先替换现有 dashboard，避免每次轮询都往 view stack 里叠一层弹窗。
+        // 刷新结果优先替换现有 dashboard，避免每次手动查询都往 view stack 里叠一层弹窗。
         if self.bottom_pane.active_view_id() == Some(crate::supervisor_dashboard::VIEW_ID) {
             self.bottom_pane
                 .replace_selection_view_if_active(crate::supervisor_dashboard::VIEW_ID, params);

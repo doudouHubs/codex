@@ -12,8 +12,8 @@ use std::sync::RwLock;
 const MAX_WORK_ITEMS: usize = 256;
 const MAX_TEXT_BYTES: usize = 64 * 1024;
 
-/// 当前 worker 的状态和内容写入句柄。它不负责发送 IPC，心跳和受控读服务会读取同一份
-/// 内存快照，因此状态上报不会阻塞核心 Agent 逻辑。
+/// 当前 worker 的状态和内容写入句柄。它不主动发送 IPC，受控读服务会在查询时读取同一
+/// 份内存快照，因此状态记录不会阻塞核心 Agent 逻辑。
 #[derive(Clone, Debug)]
 pub struct SupervisorReporter {
     state: Arc<RwLock<ReporterState>>,

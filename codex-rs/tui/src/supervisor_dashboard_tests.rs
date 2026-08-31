@@ -61,7 +61,7 @@ fn record(
         cwd: format!("/workspace/{pid}").into(),
         thread_id: thread_id.map(str::to_string),
         created_at: 100,
-        last_heartbeat_at: 200,
+        last_observed_at: 200,
         last_state_update_at: 200,
         exit_code: None,
     }
@@ -70,7 +70,7 @@ fn record(
 #[test]
 fn dashboard_snapshot_covers_current_and_managed_processes() {
     let snapshot = SupervisorSnapshot {
-        protocol_version: 1,
+        protocol_version: 2,
         daemon_pid: 900,
         processes: vec![
             record(
@@ -104,7 +104,7 @@ fn dashboard_snapshot_covers_current_and_managed_processes() {
 #[test]
 fn dashboard_snapshot_handles_empty_registry() {
     let snapshot = SupervisorSnapshot {
-        protocol_version: 1,
+        protocol_version: 2,
         daemon_pid: 901,
         processes: Vec::new(),
     };

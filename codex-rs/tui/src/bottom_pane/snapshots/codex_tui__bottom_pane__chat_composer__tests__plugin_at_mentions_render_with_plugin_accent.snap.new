@@ -1,6 +1,6 @@
 ---
 source: tui/src/bottom_pane/chat_composer.rs
-assertion_line: 6202
+assertion_line: 6289
 expression: "format!(\"text:    {text}\\nmagenta: {magenta}\")"
 ---
 text:     › @sample plugin

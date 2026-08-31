@@ -21,13 +21,13 @@ fn process_records_use_camel_case_wire_names() {
         cwd: PathBuf::from("."),
         thread_id: Some("thread-1".to_string()),
         created_at: 1,
-        last_heartbeat_at: 2,
+        last_observed_at: 2,
         last_state_update_at: 2,
         exit_code: None,
     };
     let json = serde_json::to_value(record).expect("record serializes");
     assert_eq!(json["parentPid"], 1);
-    assert_eq!(json["lastHeartbeatAt"], 2);
+    assert_eq!(json["lastObservedAt"], 2);
     assert_eq!(json["threadId"], "thread-1");
 }
 

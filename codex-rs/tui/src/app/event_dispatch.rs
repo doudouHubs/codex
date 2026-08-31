@@ -812,7 +812,7 @@ impl App {
             }
             AppEvent::RefreshSupervisorDashboard => {
                 // 刷新事件可能在用户按 Esc 后才从队列中取出；只有 dashboard 仍然可见时
-                // 才能把它当作有效的轮询请求，避免过期事件重新夺回输入焦点。
+                // 才能把它当作有效的手动查询，避免过期事件重新夺回输入焦点。
                 if self.chat_widget.supervisor_dashboard_is_active() {
                     self.chat_widget.show_supervisor_dashboard_loading();
                     crate::supervisor_dashboard::request_snapshot(self.app_event_tx.clone());

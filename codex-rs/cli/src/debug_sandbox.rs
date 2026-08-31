@@ -257,9 +257,15 @@ async fn run_command_under_sandbox(
     #[cfg(target_os = "windows")]
     let workspace_roots = config.effective_workspace_roots();
 
-    let env = create_env(
+    let mut env = create_env(
         &config.permissions.shell_environment_policy,
         /*thread_id*/ None,
+    );
+    // sandbox 子进程可能再次启动 Codex；必须让它使用当前受权限边界保护的
+    // CODEX_HOME，才能连接外层 supervisor，而不是回退到宿主默认 home 后失联。
+    env.insert(
+        "CODEX_HOME".to_string(),
+        config.codex_home.display().to_string(),
     );
     let mut permission_profile = match sandbox_state.as_ref() {
         Some(state) => match &state.permission_profile {

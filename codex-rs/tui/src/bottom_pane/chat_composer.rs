@@ -2191,6 +2191,7 @@ impl ChatComposer {
     pub(crate) fn insert_str(&mut self, text: &str) {
         self.draft.textarea.insert_str(text);
         self.sync_bash_mode_from_text();
+        self.sync_prompt_mode_from_text();
         self.sync_popups();
     }
 
@@ -2270,6 +2271,7 @@ impl ChatComposer {
             let input = self.normalize_first_keyboard_symbol(input);
             self.draft.textarea.input(input);
             self.sync_bash_mode_from_text();
+            self.sync_prompt_mode_from_text();
             let text_after = self.draft.textarea.text();
             self.draft
                 .pending_pastes
@@ -2333,6 +2335,7 @@ impl ChatComposer {
         let input = self.normalize_first_keyboard_symbol(input);
         self.draft.textarea.input(input);
         self.sync_bash_mode_from_text();
+        self.sync_prompt_mode_from_text();
 
         let text_after = self.draft.textarea.text();
         self.draft
@@ -3972,6 +3975,7 @@ impl ChatComposer {
         let input = self.normalize_first_keyboard_symbol(input);
         self.draft.textarea.input(input);
         self.sync_bash_mode_from_text();
+        self.sync_prompt_mode_from_text();
 
         if let Some(elements_before) = elements_before {
             self.reconcile_deleted_elements(elements_before);
@@ -4022,6 +4026,25 @@ impl ChatComposer {
         if !self.draft.is_bash_mode && self.draft.textarea.text().starts_with('!') {
             self.draft.textarea.replace_range(0..1, "");
             self.draft.is_bash_mode = true;
+        }
+    }
+
+    /// 将实时编辑后补到首位的 `#` 吸收为 Prompt mode 的虚拟前缀。
+    ///
+    /// 这里只处理正在编辑的增量输入；历史恢复和外部编辑仍由全量文本恢复路径负责，
+    /// 避免普通历史内容因为恰好以 `#` 开头而意外启动 Prompt 优化线程。
+    fn sync_prompt_mode_from_text(&mut self) {
+        if !self.prompt_mode_available
+            || self.prompt_mode != ComposerPromptMode::Inactive
+            || self.draft.is_bash_mode
+        {
+            return;
+        }
+        if self.draft.textarea.text().starts_with('#') {
+            // 与 Shell mode 吸收 `!` 一致，移除实际字符后保留光标和正文的编辑语义。
+            self.draft.textarea.replace_range(0..1, "");
+            self.set_prompt_optimization_mode(PromptOptimizationMode::Full);
+            self.set_prompt_mode(ComposerPromptMode::Hash);
         }
     }
 
@@ -5386,6 +5409,59 @@ mod tests {
     }
 
     #[test]
+    fn leading_hash_added_after_existing_text_enters_prompt_mode() {
+        let (mut composer, _rx) = new_prompt_test_composer();
+        composer.insert_str("draft");
+        composer.set_current_cursor(/*cursor*/ 0);
+
+        let (result, needs_redraw) =
+            composer.handle_key_event(KeyEvent::new(KeyCode::Char('#'), KeyModifiers::NONE));
+
+        assert_eq!(result, InputResult::None);
+        assert!(needs_redraw);
+        assert_eq!(composer.prompt_mode(), ComposerPromptMode::Hash);
+        assert_eq!(composer.current_text(), "draft");
+        assert_eq!(composer.draft.textarea.text(), "draft");
+        assert_eq!(composer.cursor(), 0);
+    }
+
+    #[test]
+    fn hash_after_existing_text_stays_literal() {
+        let (mut composer, _rx) = new_prompt_test_composer();
+        composer.insert_str("draft");
+
+        let (result, needs_redraw) =
+            composer.handle_key_event(KeyEvent::new(KeyCode::Char('#'), KeyModifiers::NONE));
+
+        assert_eq!(result, InputResult::None);
+        assert!(needs_redraw);
+        assert_eq!(composer.prompt_mode(), ComposerPromptMode::Inactive);
+        assert_eq!(composer.current_text(), "draft#");
+    }
+
+    #[test]
+    fn leading_hash_is_literal_when_prompt_mode_is_unavailable_or_shell_is_active() {
+        let (mut composer, _rx) = new_prompt_test_composer();
+        composer.set_prompt_mode_available(/*available*/ false);
+        composer.insert_str("draft");
+        composer.set_current_cursor(/*cursor*/ 0);
+
+        let _ = composer.handle_key_event(KeyEvent::new(KeyCode::Char('#'), KeyModifiers::NONE));
+
+        assert_eq!(composer.prompt_mode(), ComposerPromptMode::Inactive);
+        assert_eq!(composer.current_text(), "#draft");
+
+        let (mut composer, _rx) = new_prompt_test_composer();
+        composer.set_text_content("!".to_string(), Vec::new(), Vec::new());
+
+        let _ = composer.handle_key_event(KeyEvent::new(KeyCode::Char('#'), KeyModifiers::NONE));
+
+        assert_eq!(composer.prompt_mode(), ComposerPromptMode::Inactive);
+        assert_eq!(composer.current_text(), "!#");
+        assert!(composer.draft.is_bash_mode);
+    }
+
+    #[test]
     fn hash_ctrl_enter_submits_as_a_normal_turn_and_exits_prompt_mode() {
         let (mut composer, _rx) = new_prompt_test_composer();
         composer.set_prompt_mode(ComposerPromptMode::Hash);
@@ -6037,6 +6113,17 @@ mod tests {
             "prompt_mode",
             /*enhanced_keys_supported*/ true,
             |composer| {
+                let _ = composer
+                    .handle_key_event(KeyEvent::new(KeyCode::Char('#'), KeyModifiers::NONE));
+            },
+        );
+
+        snapshot_composer_state(
+            "prompt_mode_after_leading_hash",
+            /*enhanced_keys_supported*/ true,
+            |composer| {
+                composer.insert_str("draft");
+                composer.set_current_cursor(/*cursor*/ 0);
                 let _ = composer
                     .handle_key_event(KeyEvent::new(KeyCode::Char('#'), KeyModifiers::NONE));
             },

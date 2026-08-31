@@ -12,22 +12,11 @@ use uuid::Uuid;
 pub(crate) enum Request {
     Ping,
     Register(RegisterRequest),
-    Heartbeat {
-        id: Uuid,
-        lease_token: Uuid,
-        now: i64,
-        status: WorkerStatus,
-    },
-    Unregister {
-        id: Uuid,
-        lease_token: Uuid,
-    },
+    Unregister { id: Uuid, lease_token: Uuid },
     List,
     ReadWork(WorkRequest),
     SpawnWorker(SpawnWorkerRequest),
-    Terminate {
-        id: Uuid,
-    },
+    Terminate { id: Uuid },
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -68,12 +57,22 @@ pub(crate) struct SpawnWorkerRequest {
 #[derive(Debug, Serialize, Deserialize)]
 pub(crate) enum Response {
     Pong,
-    Registered { id: Uuid, lease_token: Uuid },
-    Spawned { id: Uuid, pid: u32 },
+    Registered {
+        id: Uuid,
+        lease_token: Uuid,
+        #[serde(default)]
+        protocol_version: Option<u32>,
+    },
+    Spawned {
+        id: Uuid,
+        pid: u32,
+    },
     Snapshot(SupervisorSnapshot),
     WorkPage(WorkPage),
     Ack,
-    Error { message: String },
+    Error {
+        message: String,
+    },
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -84,11 +83,13 @@ pub(crate) struct Envelope {
 
 #[derive(Debug, Serialize, Deserialize)]
 pub(crate) enum WorkerRequest {
+    ReadStatus,
     ReadWork(WorkRequest),
 }
 
 #[derive(Debug, Serialize, Deserialize)]
 pub(crate) enum WorkerResponse {
+    Status(WorkerStatus),
     WorkPage(WorkPage),
     Error { message: String },
 }

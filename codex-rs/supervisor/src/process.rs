@@ -127,7 +127,7 @@ pub(crate) async fn spawn_worker(
                 cwd: request.cwd,
                 thread_id: request.thread_id,
                 created_at: now,
-                last_heartbeat_at: now,
+                last_observed_at: now,
                 last_state_update_at: now,
                 exit_code: None,
             },
@@ -152,7 +152,7 @@ pub(crate) async fn spawn_worker(
         if let Some(record) = state.records.get_mut(&id) {
             record.status = crate::ProcessStatus::Exited;
             record.exit_code = exit_code;
-            record.last_heartbeat_at = crate::unix_seconds();
+            record.last_observed_at = crate::unix_seconds();
         }
     });
     Ok(Response::Spawned { id, pid })

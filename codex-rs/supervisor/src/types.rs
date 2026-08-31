@@ -14,7 +14,8 @@ pub enum ProcessKind {
     Cli,
 }
 
-/// 进程生命周期状态。`Unresponsive` 表示租约过期，不能继续视为可控的运行中进程。
+/// 进程生命周期状态。`Unresponsive` 表示一次按需查询未能连接到 worker，不能继续
+/// 视为当前可控的运行中进程。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub enum ProcessStatus {
@@ -52,7 +53,7 @@ pub enum ProcessMode {
     Mixed,
 }
 
-/// worker 在心跳中上报的轻量状态。完整工作内容不进入 supervisor 状态表。
+/// worker 通过受控读服务返回的轻量状态。完整工作内容不进入 supervisor 状态表。
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct WorkerStatus {
@@ -306,7 +307,7 @@ pub struct ProcessRecord {
     pub cwd: PathBuf,
     pub thread_id: Option<String>,
     pub created_at: i64,
-    pub last_heartbeat_at: i64,
+    pub last_observed_at: i64,
     pub last_state_update_at: i64,
     pub exit_code: Option<i32>,
 }

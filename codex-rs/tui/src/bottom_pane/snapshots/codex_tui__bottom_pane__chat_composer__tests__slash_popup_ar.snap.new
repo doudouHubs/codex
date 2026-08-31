@@ -1,6 +1,6 @@
 ---
 source: tui/src/bottom_pane/chat_composer.rs
-assertion_line: 9997
+assertion_line: 10084
 expression: terminal.backend()
 ---
 "                                                            "
