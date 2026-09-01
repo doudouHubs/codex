@@ -1,0 +1,54 @@
+---
+source: tui/src/app/rules_sidebar_tests.rs
+expression: "format!(\"--- before ---\\n{before}\\n--- after plan wheel ---\\n{after}\")"
+---
+--- before ---
+~                                                                              │ Rules  0  refreshing
+~                                                                              │
+~                                                                              │ Loading rules...
+~                                                                              │
+~                                                                              │
+~                                                                              │
+~                                                                              │
+~                                                                              │
+~                                                                              │
+~                                                                              │
+~                                                                              │
+~                                                                              │ Ctrl+T close
+~                                                                              │─
+~                                                                              │ Plan  0/8
+~                                                                              │
+~                                                                              │ Keep the current execution           ┃
+~                                                                              │ visible.                             ┃
+~                                                                              │ □ Execute verification step 0        ┃
+~                                                                              │   with enough detail to wrap.        │
+~                                                                              │ □ Execute verification step 1        │
+                                                                               │   with enough detail to wrap.        │
+ › Ask Codex to do anything                                                    │ □ Execute verification step 2        │
+                                                                               │   with enough detail to wrap.        │
+  gpt-test default · C:\tmp\project                                            │ Mouse wheel scroll
+--- after plan wheel ---
+~                                                                              │ Rules  0  refreshing
+~                                                                              │
+~                                                                              │ Loading rules...
+~                                                                              │
+~                                                                              │
+~                                                                              │
+~                                                                              │
+~                                                                              │
+~                                                                              │
+~                                                                              │
+~                                                                              │
+~                                                                              │ Ctrl+T close
+~                                                                              │─
+~                                                                              │ Plan  0/8
+~                                                                              │
+~                                                                              │ visible.                             ┃
+~                                                                              │ □ Execute verification step 0        ┃
+~                                                                              │   with enough detail to wrap.        ┃
+~                                                                              │ □ Execute verification step 1        │
+~                                                                              │   with enough detail to wrap.        │
+                                                                               │ □ Execute verification step 2        │
+ › Ask Codex to do anything                                                    │   with enough detail to wrap.        │
+                                                                               │ □ Execute verification step 3        │
+  gpt-test default · C:\tmp\project                                            │ Mouse wheel scroll

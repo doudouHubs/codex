@@ -1,7 +1,9 @@
 //! Transcript and active-cell bookkeeping for `ChatWidget`.
 
+use super::ChatWidget;
 use super::HistoryCell;
 use super::HistoryRenderMode;
+use codex_protocol::plan_tool::UpdatePlanArgs;
 use std::cell::Cell;
 
 /// Identifies the render state that determines an active cell's viewport height.
@@ -50,6 +52,8 @@ pub(super) struct TranscriptState {
     pub(super) saw_plan_item_this_turn: bool,
     /// Latest `update_plan` checklist task counts for terminal-title rendering.
     pub(super) last_plan_progress: Option<(usize, usize)>,
+    /// Latest non-empty `update_plan` snapshot used by the rules sidebar.
+    pub(super) latest_update_plan: Option<UpdatePlanArgs>,
     /// Incremental buffer for streamed plan content.
     pub(super) plan_delta_buffer: String,
     /// True while a plan item is streaming.
@@ -99,6 +103,12 @@ impl TranscriptState {
         self.latest_proposed_plan_markdown = None;
         self.plan_delta_buffer.clear();
         self.plan_item_active = false;
+    }
+}
+
+impl ChatWidget {
+    pub(crate) fn latest_update_plan(&self) -> Option<&UpdatePlanArgs> {
+        self.transcript.latest_update_plan.as_ref()
     }
 }
 

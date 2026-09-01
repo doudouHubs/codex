@@ -50,6 +50,55 @@ pub(crate) fn new_plan_update(update: UpdatePlanArgs) -> PlanUpdateCell {
     PlanUpdateCell { explanation, plan }
 }
 
+/// 提取历史记录和实时计划侧栏共用的说明与清单行。
+///
+/// 状态图标、颜色和换行规则只保留一个实现，避免侧栏与 transcript 中已提交的计划表示逐渐分叉。
+pub(crate) fn plan_update_checklist_lines(
+    explanation: Option<&str>,
+    plan: &[PlanItemArg],
+    width: u16,
+) -> Vec<Line<'static>> {
+    let render_note = |text: &str| -> Vec<Line<'static>> {
+        let wrap_width = width.saturating_sub(4).max(1) as usize;
+        let note = Line::from(text.to_string().dim().italic());
+        let wrapped = adaptive_wrap_line(&note, RtOptions::new(wrap_width));
+        let mut out = Vec::new();
+        push_owned_lines(&wrapped, &mut out);
+        out
+    };
+
+    let render_step = |status: &StepStatus, text: &str| -> Vec<Line<'static>> {
+        let (box_str, step_style) = match status {
+            StepStatus::Completed => ("✔ ", Style::default().crossed_out().dim()),
+            StepStatus::InProgress => ("□ ", Style::default().cyan().bold()),
+            StepStatus::Pending => ("□ ", Style::default().dim()),
+        };
+
+        let opts = RtOptions::new(width.saturating_sub(4).max(1) as usize)
+            .initial_indent(box_str.into())
+            .subsequent_indent("  ".into());
+        let step = Line::from(text.to_string().set_style(step_style));
+        let wrapped = adaptive_wrap_line(&step, opts);
+        let mut out = Vec::new();
+        push_owned_lines(&wrapped, &mut out);
+        out
+    };
+
+    let mut lines = Vec::new();
+    if let Some(explanation) = explanation.map(str::trim).filter(|text| !text.is_empty()) {
+        lines.extend(render_note(explanation));
+    }
+
+    if plan.is_empty() {
+        lines.push(Line::from("(no steps provided)".dim().italic()));
+    } else {
+        for PlanItemArg { step, status } in plan {
+            lines.extend(render_step(status, step));
+        }
+    }
+    lines
+}
+
 /// Create a proposed-plan cell that snapshots the session cwd for later markdown rendering.
 ///
 /// The plan body is stored as raw markdown so terminal resize reflow can render it again at the
@@ -174,54 +223,12 @@ pub(crate) struct PlanUpdateCell {
 
 impl HistoryCell for PlanUpdateCell {
     fn display_lines(&self, width: u16) -> Vec<Line<'static>> {
-        let render_note = |text: &str| -> Vec<Line<'static>> {
-            let wrap_width = width.saturating_sub(4).max(1) as usize;
-            let note = Line::from(text.to_string().dim().italic());
-            let wrapped = adaptive_wrap_line(&note, RtOptions::new(wrap_width));
-            let mut out = Vec::new();
-            push_owned_lines(&wrapped, &mut out);
-            out
-        };
-
-        let render_step = |status: &StepStatus, text: &str| -> Vec<Line<'static>> {
-            let (box_str, step_style) = match status {
-                StepStatus::Completed => ("✔ ", Style::default().crossed_out().dim()),
-                StepStatus::InProgress => ("□ ", Style::default().cyan().bold()),
-                StepStatus::Pending => ("□ ", Style::default().dim()),
-            };
-
-            let opts = RtOptions::new(width.saturating_sub(4).max(1) as usize)
-                .initial_indent(box_str.into())
-                .subsequent_indent("  ".into());
-            let step = Line::from(text.to_string().set_style(step_style));
-            let wrapped = adaptive_wrap_line(&step, opts);
-            let mut out = Vec::new();
-            push_owned_lines(&wrapped, &mut out);
-            out
-        };
-
-        let mut lines: Vec<Line<'static>> = vec![];
-        lines.push(vec!["• ".dim(), "Updated Plan".bold()].into());
-
-        let mut indented_lines = vec![];
-        let note = self
-            .explanation
-            .as_ref()
-            .map(|s| s.trim())
-            .filter(|t| !t.is_empty());
-        if let Some(expl) = note {
-            indented_lines.extend(render_note(expl));
-        };
-
-        if self.plan.is_empty() {
-            indented_lines.push(Line::from("(no steps provided)".dim().italic()));
-        } else {
-            for PlanItemArg { step, status } in self.plan.iter() {
-                indented_lines.extend(render_step(status, step));
-            }
-        }
-        lines.extend(prefix_lines(indented_lines, "  └ ".dim(), "    ".into()));
-
+        let mut lines = vec![vec!["• ".dim(), "Updated Plan".bold()].into()];
+        lines.extend(prefix_lines(
+            plan_update_checklist_lines(self.explanation.as_deref(), &self.plan, width),
+            "  └ ".dim(),
+            "    ".into(),
+        ));
         lines
     }
 

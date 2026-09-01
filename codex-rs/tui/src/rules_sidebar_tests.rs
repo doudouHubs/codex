@@ -1,6 +1,9 @@
 use std::fs;
 
 use codex_protocol::ThreadId;
+use codex_protocol::plan_tool::PlanItemArg;
+use codex_protocol::plan_tool::StepStatus;
+use codex_protocol::plan_tool::UpdatePlanArgs;
 use pretty_assertions::assert_eq;
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
@@ -33,6 +36,44 @@ fn render_panel(state: &mut RulesSidebarState, width: u16, height: u16) -> Strin
         .join("\n")
         .trim_end()
         .to_string()
+}
+
+fn render_plan_panel(
+    state: &mut RulesSidebarState,
+    plan: &UpdatePlanArgs,
+    width: u16,
+    height: u16,
+) -> String {
+    let area = Rect::new(0, 0, width, height);
+    let mut buffer = Buffer::empty(area);
+    state.plan.render(area, &mut buffer, plan);
+    (0..height)
+        .map(|y| {
+            let row = (0..width)
+                .map(|x| buffer[(x, y)].symbol())
+                .collect::<String>();
+            row.trim_end().to_string()
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
+        .trim_end()
+        .to_string()
+}
+
+#[test]
+fn sidebar_plan_split_reserves_separator_and_gives_extra_row_to_rules() {
+    let area = Rect::new(7, 3, 40, 12);
+    let (rules, divider, plan) = split_sidebar_area(area);
+
+    assert_eq!(rules, Rect::new(7, 3, 40, 6));
+    assert_eq!(divider, Rect::new(7, 9, 40, 1));
+    assert_eq!(plan, Rect::new(7, 10, 40, 5));
+
+    let odd_area = Rect::new(0, 0, 40, 11);
+    let (rules, divider, plan) = split_sidebar_area(odd_area);
+    assert_eq!(rules.height, 5);
+    assert_eq!(divider.height, 1);
+    assert_eq!(plan.height, 5);
 }
 
 #[test]
@@ -123,5 +164,39 @@ fn rules_panel_wrap_error_and_scroll_snapshots() {
     insta::assert_snapshot!(
         "rules_sidebar_stale_error",
         render_panel(&mut state, 40, 12)
+    );
+}
+
+#[test]
+fn plan_panel_wrap_and_scroll_snapshot() {
+    let plan = UpdatePlanArgs {
+        explanation: Some("Keep the execution state visible while the work is running.".into()),
+        plan: vec![
+            PlanItemArg {
+                step: "Inspect the existing sidebar ownership and layout boundaries.".into(),
+                status: StepStatus::Completed,
+            },
+            PlanItemArg {
+                step: "Implement the split rules and plan surface.".into(),
+                status: StepStatus::InProgress,
+            },
+            PlanItemArg {
+                step: "Add focused interaction and snapshot coverage.".into(),
+                status: StepStatus::Pending,
+            },
+            PlanItemArg {
+                step: "Run the focused TUI test suite.".into(),
+                status: StepStatus::Pending,
+            },
+        ],
+    };
+    let mut state = test_state();
+    let before = render_plan_panel(&mut state, &plan, 40, 10);
+    state.plan.scroll_down();
+    let after = render_plan_panel(&mut state, &plan, 40, 10);
+
+    insta::assert_snapshot!(
+        "rules_sidebar_plan_wrapped_and_scrolled",
+        format!("--- top ---\n{before}\n--- after wheel ---\n{after}")
     );
 }

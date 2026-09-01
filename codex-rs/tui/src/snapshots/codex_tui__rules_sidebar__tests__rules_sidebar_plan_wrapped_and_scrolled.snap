@@ -1,0 +1,26 @@
+---
+source: tui/src/rules_sidebar_tests.rs
+expression: "format!(\"--- top ---\\n{before}\\n--- after wheel ---\\n{after}\")"
+---
+--- top ---
+ Plan  1/4
+
+ Keep the execution state visible     ┃
+ while the work is running.           ┃
+ ✔ Inspect the existing sidebar       ┃
+   ownership and layout               │
+   boundaries.                        │
+ □ Implement the split rules and      │
+   plan surface.                      │
+ Mouse wheel scroll
+--- after wheel ---
+ Plan  1/4
+
+ while the work is running.           ┃
+ ✔ Inspect the existing sidebar       ┃
+   ownership and layout               ┃
+   boundaries.                        │
+ □ Implement the split rules and      │
+   plan surface.                      │
+ □ Add focused interaction and        │
+ Mouse wheel scroll

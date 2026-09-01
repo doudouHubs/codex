@@ -165,6 +165,7 @@ mod render;
 mod resize_reflow_cap;
 mod resume_picker;
 mod rules_sidebar;
+mod rules_sidebar_plan;
 mod selection_list;
 mod service_tier_resolution;
 mod session_archive_commands;

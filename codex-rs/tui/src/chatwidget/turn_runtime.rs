@@ -510,6 +510,9 @@ impl ChatWidget {
             })
             .count();
         self.transcript.last_plan_progress = (total > 0).then_some((completed, total));
+        // 侧栏展示的是当前线程最后一份非空执行清单；空清单表示计划已被清除，但历史仍保留
+        // 这次 update_plan 事件，便于 transcript 回看完整操作轨迹。
+        self.transcript.latest_update_plan = (!update.plan.is_empty()).then(|| update.clone());
         self.refresh_status_surfaces();
         self.add_to_history(history_cell::new_plan_update(update));
     }

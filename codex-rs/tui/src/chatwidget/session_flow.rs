@@ -25,6 +25,8 @@ impl ChatWidget {
         self.bottom_pane
             .set_queue_submissions(/*queue_submissions*/ false);
         if previous_thread_id != self.thread_id {
+            // update_plan 属于线程状态，切换线程必须先清空，避免侧栏短暂展示上一个线程的清单。
+            self.transcript.latest_update_plan = None;
             self.review.recent_auto_review_denials = RecentAutoReviewDenials::default();
             self.clear_thread_usage_state();
         }

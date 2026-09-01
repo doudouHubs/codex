@@ -5,7 +5,7 @@
 //! accent and fades away. The tier letters then appear across the row with
 //! wider peripheral gaps, converge into a centered `M A X` or `U L T R A`, and
 //! fade out before the refreshed status line fades in. Plan 实施沿用 Max 配色，
-//! 并使用居中的字面量 `Plan Begins` 标签。
+//! 并使用居中的字面量 `PLAN BEGINS` 标签。
 //! The clock starts only when the passive footer row is rendered, so a picker,
 //! flash, or instructional footer cannot consume the animation before it
 //! becomes visible. ANSI-16 and unknown-color terminals skip the transition and
@@ -194,7 +194,7 @@ fn transition_line_at_with_label(
         return Some(match label {
             EffortStatusLineLabel::Tier => tier_label_line(tier, width, assemble, opacity),
             EffortStatusLineLabel::PlanBegins => {
-                literal_label_line("Plan Begins", tier, width, opacity)
+                literal_label_line("PLAN BEGINS", tier, width, opacity)
             }
         });
     }

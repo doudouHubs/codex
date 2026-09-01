@@ -100,7 +100,7 @@ fn plan_implementation_label_is_literal_and_centered() {
     )
     .expect("Plan implementation label should be visible");
 
-    assert_eq!(text(&label), "          Plan Begins");
+    assert_eq!(text(&label), "          PLAN BEGINS");
 }
 
 #[test]

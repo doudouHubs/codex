@@ -1,7 +1,10 @@
+use codex_app_server_protocol::ServerNotification;
 use codex_app_server_protocol::SkillMetadata;
 use codex_app_server_protocol::SkillScope;
 use codex_app_server_protocol::SkillsListEntry;
 use codex_app_server_protocol::SkillsListResponse;
+use codex_app_server_protocol::TurnPlanStep;
+use codex_app_server_protocol::TurnPlanStepStatus;
 use crossterm::event::KeyCode;
 use crossterm::event::KeyEvent;
 use crossterm::event::KeyModifiers;
@@ -87,6 +90,35 @@ fn render_rules_sidebar_transcript(app: &mut App, area: Rect) -> String {
         .join("\n")
         .trim_end()
         .to_string()
+}
+
+fn publish_test_plan(app: &mut App, steps: usize) {
+    app.chat_widget.handle_server_notification(
+        ServerNotification::TurnPlanUpdated(
+            codex_app_server_protocol::TurnPlanUpdatedNotification {
+                thread_id: app
+                    .chat_widget
+                    .thread_id()
+                    .expect("test session")
+                    .to_string(),
+                turn_id: "test-turn".to_string(),
+                explanation: Some("Keep the current execution visible.".to_string()),
+                plan: (0..steps)
+                    .map(|index| TurnPlanStep {
+                        step: format!(
+                            "Execute verification step {index} with enough detail to wrap."
+                        ),
+                        status: if index == 0 {
+                            TurnPlanStepStatus::InProgress
+                        } else {
+                            TurnPlanStepStatus::Pending
+                        },
+                    })
+                    .collect(),
+            },
+        ),
+        None,
+    );
 }
 
 #[tokio::test]
@@ -216,6 +248,52 @@ async fn mouse_wheel_only_scrolls_the_left_timeline() {
         ..left_timeline_scroll
     };
     assert!(!app.handle_rules_sidebar_mouse(&mut tui, composer_scroll));
+}
+
+#[tokio::test]
+async fn plan_panel_renders_below_rules_and_scrolls_independently() {
+    let mut app = make_test_app().await;
+    start_test_session(&mut app);
+    publish_test_plan(&mut app, 8);
+    let mut tui = crate::tui::test_support::make_test_tui().expect("test tui");
+    tui.set_alt_screen_enabled(false);
+    let area = Rect::new(
+        /*x*/ 0, /*y*/ 0, /*width*/ 120, /*height*/ 24,
+    );
+    tui.terminal.set_viewport_area(area);
+    app.open_rules_sidebar(&mut tui);
+
+    let before = render_rules_sidebar_transcript(&mut app, area);
+    let plan_scroll = MouseEvent {
+        kind: MouseEventKind::ScrollDown,
+        column: 119,
+        row: 18,
+        modifiers: KeyModifiers::NONE,
+    };
+    assert!(app.handle_rules_sidebar_mouse(&mut tui, plan_scroll));
+    let after = render_rules_sidebar_transcript(&mut app, area);
+
+    assert!(before.contains("Rules  0  refreshing"));
+    assert!(before.contains("Plan  0/8"));
+    assert!(before.contains("Execute verification step 0"));
+    assert!(after.contains("Execute verification step 1"));
+    assert!(after.contains("Rules  0  refreshing"));
+    insta::assert_snapshot!(
+        "rules_sidebar_plan_mouse_scroll",
+        format!("--- before ---\n{before}\n--- after plan wheel ---\n{after}")
+    );
+}
+
+#[tokio::test]
+async fn plan_snapshot_is_cleared_when_thread_changes() {
+    let mut app = make_test_app().await;
+    start_test_session(&mut app);
+    publish_test_plan(&mut app, 1);
+    assert!(app.chat_widget.latest_update_plan().is_some());
+
+    start_test_session(&mut app);
+
+    assert!(app.chat_widget.latest_update_plan().is_none());
 }
 
 #[tokio::test]

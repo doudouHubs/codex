@@ -226,6 +226,20 @@ fn windows_terminal_program() -> PathBuf {
 }
 
 fn detect_shell() -> ShellKind {
+    let preferred_shell = if which::which(ShellKind::PowerShellCore.executable()).is_ok() {
+        Some(ShellKind::PowerShellCore)
+    } else {
+        None
+    };
+    let parent_shell = if preferred_shell.is_some() {
+        None
+    } else {
+        detect_parent_shell()
+    };
+    select_shell(preferred_shell, parent_shell)
+}
+
+fn detect_parent_shell() -> Option<ShellKind> {
     let processes = process_table();
     let mut process_id = unsafe { GetCurrentProcessId() };
 
@@ -234,7 +248,7 @@ fn detect_shell() -> ShellKind {
             break;
         };
         if let Some(shell) = shell_kind_from_process_name(&process.executable_name) {
-            return shell;
+            return Some(shell);
         }
         if process.parent_process_id == process_id {
             break;
@@ -242,8 +256,16 @@ fn detect_shell() -> ShellKind {
         process_id = process.parent_process_id;
     }
 
-    // 用户明确要求识别失败时仍可执行；cmd.exe 是 Windows 上最稳定的最终兜底。
-    ShellKind::Cmd
+    None
+}
+
+fn select_shell(preferred_shell: Option<ShellKind>, parent_shell: Option<ShellKind>) -> ShellKind {
+    // 用户要求优先使用 PowerShell 7；只有本机无法解析 pwsh.exe 时才保留当前宿主 shell，
+    // 避免在 cmd 或 Windows PowerShell 环境中强行启动不可用的程序。
+    preferred_shell
+        .or(parent_shell)
+        // 用户明确要求识别失败时仍可执行；cmd.exe 是 Windows 上最稳定的最终兜底。
+        .unwrap_or(ShellKind::Cmd)
 }
 
 fn process_table() -> HashMap<u32, ProcessInfo> {

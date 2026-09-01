@@ -31,6 +31,7 @@ use crate::keymap::PagerKeymap;
 use crate::pager_overlay::ScrollDestination;
 use crate::pager_overlay::ScrollDirection;
 use crate::pager_overlay::TranscriptOverlay;
+use crate::rules_sidebar_plan::RulesSidebarPlanState;
 
 pub(crate) const RULES_SIDEBAR_MIN_SPLIT_WIDTH: u16 = 112;
 const RULES_SIDEBAR_WIDTH: u16 = 40;
@@ -60,6 +61,27 @@ struct RulesSidebarLayout {
     bottom: Rect,
     divider: Rect,
     rules: Rect,
+    plan: Option<Rect>,
+    plan_divider: Option<Rect>,
+}
+
+fn split_sidebar_area(area: Rect) -> (Rect, Rect, Rect) {
+    // 计划区至少保留一行；扣除分隔线后的奇数高度多给规则区一行。
+    let plan_height = area.height.saturating_sub(1) / 2;
+    let divider = Rect::new(
+        area.x,
+        area.bottom().saturating_sub(plan_height + 1),
+        area.width,
+        1,
+    );
+    let rules = Rect::new(
+        area.x,
+        area.y,
+        area.width,
+        area.height.saturating_sub(plan_height + 1),
+    );
+    let plan = Rect::new(area.x, divider.bottom(), area.width, plan_height);
+    (rules, divider, plan)
 }
 
 fn rules_sidebar_layout(area: Rect, chat_widget: &ChatWidget) -> Option<RulesSidebarLayout> {
@@ -74,7 +96,13 @@ fn rules_sidebar_layout(area: Rect, chat_widget: &ChatWidget) -> Option<RulesSid
         divider.x.saturating_sub(area.x),
         area.height,
     );
-    let rules = Rect::new(rules_x, area.y, RULES_SIDEBAR_WIDTH, area.height);
+    let sidebar = Rect::new(rules_x, area.y, RULES_SIDEBAR_WIDTH, area.height);
+    let (rules, plan_divider, plan) = if chat_widget.latest_update_plan().is_some() {
+        let (rules, plan_divider, plan) = split_sidebar_area(sidebar);
+        (rules, Some(plan_divider), Some(plan))
+    } else {
+        (sidebar, None, None)
+    };
     let bottom_height = chat_widget
         .rules_sidebar_bottom_pane_height(left.width)
         .min(left.height);
@@ -91,6 +119,8 @@ fn rules_sidebar_layout(area: Rect, chat_widget: &ChatWidget) -> Option<RulesSid
         bottom,
         divider,
         rules,
+        plan,
+        plan_divider,
     })
 }
 
@@ -117,6 +147,7 @@ pub(crate) struct RulesSidebarState {
     scroll_offset: usize,
     max_scroll: usize,
     page_height: usize,
+    plan: RulesSidebarPlanState,
 }
 
 impl RulesSidebarState {
@@ -136,6 +167,7 @@ impl RulesSidebarState {
             scroll_offset: 0,
             max_scroll: 0,
             page_height: 1,
+            plan: RulesSidebarPlanState::default(),
         }
     }
 
@@ -207,6 +239,13 @@ impl RulesSidebarState {
         self.transcript.scroll_to(destination);
     }
 
+    pub(crate) fn scroll_plan(&mut self, direction: ScrollDirection) {
+        match direction {
+            ScrollDirection::Up => self.plan.scroll_up(),
+            ScrollDirection::Down => self.plan.scroll_down(),
+        }
+    }
+
     pub(crate) fn handle_mouse_scroll(
         &mut self,
         area: Rect,
@@ -218,17 +257,25 @@ impl RulesSidebarState {
             MouseEventKind::ScrollDown => ScrollDirection::Down,
             _ => return false,
         };
-        let Some(layout) = rules_sidebar_layout(area, chat_widget) else {
-            return false;
-        };
-        if !layout
-            .timeline
-            .contains(Position::new(event.column, event.row))
-        {
+        let position = Position::new(event.column, event.row);
+        if let Some(layout) = rules_sidebar_layout(area, chat_widget) {
+            if layout.timeline.contains(position) {
+                self.scroll_transcript(direction);
+                return true;
+            }
+            if layout.plan.is_some_and(|plan| plan.contains(position)) {
+                self.scroll_plan(direction);
+                return true;
+            }
             return false;
         }
-        self.scroll_transcript(direction);
-        true
+        if chat_widget.latest_update_plan().is_some()
+            && split_sidebar_area(area).2.contains(position)
+        {
+            self.scroll_plan(direction);
+            return true;
+        }
+        false
     }
 
     pub(crate) fn render(
@@ -239,7 +286,21 @@ impl RulesSidebarState {
         active_key: Option<ActiveCellTranscriptKey>,
     ) -> Option<RulesSidebarCursor> {
         let Some(layout) = rules_sidebar_layout(area, chat_widget) else {
-            self.render_rules(area, buf);
+            if let Some(plan) = chat_widget.latest_update_plan() {
+                // 窄屏没有左侧 transcript，但规则和执行计划仍保持同样的上下语义。
+                let (rules, plan_divider, plan_area) = split_sidebar_area(area);
+                self.render_rules(rules, buf);
+                Paragraph::new(
+                    (0..plan_divider.width)
+                        .map(|_| Line::from("─".dim()))
+                        .collect::<Vec<_>>(),
+                )
+                .render(plan_divider, buf);
+                self.plan.render(plan_area, buf, plan);
+            } else {
+                self.plan.reset();
+                self.render_rules(area, buf);
+            }
             return None;
         };
 
@@ -256,6 +317,21 @@ impl RulesSidebarState {
         )
         .render(layout.divider, buf);
         self.render_rules(layout.rules, buf);
+        if let (Some(plan_area), Some(plan_divider), Some(plan)) = (
+            layout.plan,
+            layout.plan_divider,
+            chat_widget.latest_update_plan(),
+        ) {
+            Paragraph::new(
+                (0..plan_divider.width)
+                    .map(|_| Line::from("─".dim()))
+                    .collect::<Vec<_>>(),
+            )
+            .render(plan_divider, buf);
+            self.plan.render(plan_area, buf, plan);
+        } else {
+            self.plan.reset();
+        }
         chat_widget
             .rules_sidebar_cursor_pos(layout.bottom)
             .map(|position| RulesSidebarCursor {

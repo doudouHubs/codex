@@ -1746,3 +1746,35 @@ async fn plan_update_renders_history_cell() {
     assert!(blob.contains("Implement feature"));
     assert!(blob.contains("Write tests"));
 }
+
+#[tokio::test]
+async fn latest_update_plan_snapshot_survives_completion_and_clears_on_empty_update() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    let update = UpdatePlanArgs {
+        explanation: Some("Keep the execution state visible.".to_string()),
+        plan: vec![PlanItemArg {
+            step: "Implement feature".to_string(),
+            status: StepStatus::InProgress,
+        }],
+    };
+
+    chat.on_task_started();
+    chat.on_plan_update(update);
+    chat.on_task_complete(
+        /*last_agent_message*/ None, /*duration_ms*/ None, /*from_replay*/ false,
+    );
+
+    let snapshot = chat.latest_update_plan().expect("non-empty plan snapshot");
+    assert_eq!(
+        snapshot.explanation.as_deref(),
+        Some("Keep the execution state visible.")
+    );
+    assert_eq!(snapshot.plan.len(), 1);
+    assert_eq!(snapshot.plan[0].step, "Implement feature");
+
+    chat.on_plan_update(UpdatePlanArgs {
+        explanation: None,
+        plan: Vec::new(),
+    });
+    assert!(chat.latest_update_plan().is_none());
+}

@@ -7,6 +7,7 @@ use super::build_direct_shell_spec;
 use super::build_shell_wrapper_content;
 use super::build_windows_terminal_spec;
 use super::encode_powershell_command;
+use super::select_shell;
 use super::shell_kind_from_process_name;
 use super::shell_program;
 use super::windows_terminal_program;
@@ -91,4 +92,36 @@ fn shell_process_names_are_case_insensitive() {
         Some(ShellKind::WindowsPowerShell)
     );
     assert_eq!(shell_kind_from_process_name("cargo.exe"), None);
+}
+
+#[test]
+fn pwsh_is_preferred_over_the_detected_parent_shell() {
+    assert_eq!(
+        select_shell(Some(ShellKind::PowerShellCore), Some(ShellKind::Cmd)),
+        ShellKind::PowerShellCore
+    );
+    assert_eq!(
+        select_shell(
+            Some(ShellKind::PowerShellCore),
+            Some(ShellKind::WindowsPowerShell),
+        ),
+        ShellKind::PowerShellCore
+    );
+}
+
+#[test]
+fn detected_parent_shell_is_used_when_pwsh_is_unavailable() {
+    assert_eq!(
+        select_shell(None, Some(ShellKind::WindowsPowerShell)),
+        ShellKind::WindowsPowerShell
+    );
+    assert_eq!(
+        select_shell(None, Some(ShellKind::PowerShellCore)),
+        ShellKind::PowerShellCore
+    );
+}
+
+#[test]
+fn cmd_is_the_final_shell_fallback() {
+    assert_eq!(select_shell(None, None), ShellKind::Cmd);
 }
