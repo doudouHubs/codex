@@ -34,7 +34,8 @@ use crate::pager_overlay::TranscriptOverlay;
 use crate::rules_sidebar_plan::RulesSidebarPlanState;
 
 pub(crate) const RULES_SIDEBAR_MIN_SPLIT_WIDTH: u16 = 112;
-const RULES_SIDEBAR_WIDTH: u16 = 40;
+const RULES_SIDEBAR_MIN_WIDTH: u16 = 40;
+const RULES_SIDEBAR_MAX_WIDTH: u16 = 64;
 const RULES_LOAD_TIMEOUT: Duration = Duration::from_secs(2);
 const MAX_RULES_OUTPUT_BYTES: usize = 1024 * 1024;
 const MAX_RULES: usize = 256;
@@ -84,11 +85,17 @@ fn split_sidebar_area(area: Rect) -> (Rect, Rect, Rect) {
     (rules, divider, plan)
 }
 
+fn rules_sidebar_width(total_width: u16) -> u16 {
+    // 侧栏约占终端宽度的三分之一；设置上下限是为了兼顾窄屏主区可用性和宽屏计划可读性。
+    (total_width / 3).clamp(RULES_SIDEBAR_MIN_WIDTH, RULES_SIDEBAR_MAX_WIDTH)
+}
+
 fn rules_sidebar_layout(area: Rect, chat_widget: &ChatWidget) -> Option<RulesSidebarLayout> {
     if area.width < RULES_SIDEBAR_MIN_SPLIT_WIDTH {
         return None;
     }
-    let rules_x = area.right().saturating_sub(RULES_SIDEBAR_WIDTH);
+    let sidebar_width = rules_sidebar_width(area.width);
+    let rules_x = area.right().saturating_sub(sidebar_width);
     let divider = Rect::new(rules_x.saturating_sub(1), area.y, 1, area.height);
     let left = Rect::new(
         area.x,
@@ -96,7 +103,7 @@ fn rules_sidebar_layout(area: Rect, chat_widget: &ChatWidget) -> Option<RulesSid
         divider.x.saturating_sub(area.x),
         area.height,
     );
-    let sidebar = Rect::new(rules_x, area.y, RULES_SIDEBAR_WIDTH, area.height);
+    let sidebar = Rect::new(rules_x, area.y, sidebar_width, area.height);
     let (rules, plan_divider, plan) = if chat_widget.latest_update_plan().is_some() {
         let (rules, plan_divider, plan) = split_sidebar_area(sidebar);
         (rules, Some(plan_divider), Some(plan))

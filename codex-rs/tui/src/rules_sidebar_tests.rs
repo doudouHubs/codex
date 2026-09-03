@@ -77,6 +77,15 @@ fn sidebar_plan_split_reserves_separator_and_gives_extra_row_to_rules() {
 }
 
 #[test]
+fn sidebar_width_scales_with_terminal_width_and_stays_bounded() {
+    assert_eq!(rules_sidebar_width(RULES_SIDEBAR_MIN_SPLIT_WIDTH), 40);
+    assert_eq!(rules_sidebar_width(120), 40);
+    assert_eq!(rules_sidebar_width(144), 48);
+    assert_eq!(rules_sidebar_width(192), 64);
+    assert_eq!(rules_sidebar_width(u16::MAX), 64);
+}
+
+#[test]
 fn parses_rule_system_list_contract() {
     let thread_id =
         ThreadId::from_string("00000000-0000-0000-0000-000000000123").expect("valid thread id");
