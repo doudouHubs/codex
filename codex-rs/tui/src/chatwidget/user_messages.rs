@@ -122,15 +122,15 @@ impl ThreadComposerState {
 
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) struct ThreadInputState {
+    pub(crate) questions: Option<crate::bottom_pane::QuestionState>,
     pub(super) composer: Option<ThreadComposerState>,
     pub(super) safety_buffering_prompt: Option<UserMessage>,
-    pub(super) pending_steers: VecDeque<UserMessage>,
-    pub(super) pending_steer_history_records: VecDeque<UserMessageHistoryRecord>,
-    pub(super) pending_steer_compare_keys: VecDeque<PendingSteerCompareKey>,
+    pub(crate) pending_steers: VecDeque<PendingSteer>,
     pub(super) rejected_steers_queue: VecDeque<UserMessage>,
     pub(super) rejected_steer_history_records: VecDeque<UserMessageHistoryRecord>,
     pub(super) queued_user_messages: VecDeque<QueuedUserMessage>,
     pub(super) queued_user_message_history_records: VecDeque<UserMessageHistoryRecord>,
+    pub(crate) recovered_queue: bool,
     pub(super) user_turn_pending_start: bool,
     pub(super) submit_pending_steers_after_interrupt: bool,
     pub(super) current_collaboration_mode: CollaborationMode,
@@ -170,8 +170,10 @@ impl From<&str> for UserMessage {
     }
 }
 
-#[derive(Debug)]
-pub(super) struct PendingSteer {
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) struct PendingSteer {
+    /// Preserved across request retries and thread switches until this submission commits.
+    pub(crate) client_id: String,
     pub(super) user_message: UserMessage,
     pub(super) history_record: UserMessageHistoryRecord,
     pub(super) compare_key: PendingSteerCompareKey,
@@ -589,11 +591,65 @@ pub(crate) fn mention_bindings_from_user_inputs(
                     path: path.clone(),
                 })
             }
-            UserInput::Text { .. } | UserInput::Image { .. } | UserInput::LocalImage { .. } => None,
+            UserInput::Text { .. }
+            | UserInput::Image { .. }
+            | UserInput::LocalImage { .. }
+            | UserInput::Audio { .. }
+            | UserInput::LocalAudio { .. } => None,
         })
         .collect();
+    for item in items {
+        let UserInput::Text {
+            text,
+            text_elements,
+        } = item
+        else {
+            continue;
+        };
+        for element in text_elements {
+            if let Some((mention, path, end)) =
+                crate::task_mentions::parse_task_link(text, element.byte_range.start)
+                && end == element.byte_range.end
+                && element
+                    .placeholder()
+                    .and_then(|placeholder| placeholder.strip_prefix('@'))
+                    == Some(mention.as_str())
+            {
+                mention_bindings.push(MentionBinding {
+                    sigil: '@',
+                    mention,
+                    path,
+                });
+            }
+        }
+    }
     mention_bindings.sort_by_key(|binding| {
-        mention_start(binding.sigil, &binding.mention).unwrap_or(usize::MAX)
+        let token = if crate::task_mentions::valid_thread_path(&binding.path).is_some() {
+            crate::task_mentions::format_task_link(&binding.mention, &binding.path)
+        } else {
+            format!("{}{}", binding.sigil, binding.mention)
+        };
+        let mut text_offset = 0;
+        items
+            .iter()
+            .find_map(|item| {
+                let UserInput::Text {
+                    text,
+                    text_elements,
+                } = item
+                else {
+                    return None;
+                };
+                let offset = text_offset;
+                text_offset += text.len();
+                text_elements.iter().find_map(|element| {
+                    (text.get(element.byte_range.start..element.byte_range.end)
+                        == Some(token.as_str()))
+                    .then_some(offset + element.byte_range.start)
+                })
+            })
+            .or_else(|| mention_start(binding.sigil, &binding.mention))
+            .unwrap_or(usize::MAX)
     });
     mention_bindings
 }
@@ -641,10 +697,7 @@ impl ChatWidget {
         }
     }
 
-    /// Build the compare key for a submitted pending steer without invoking the
-    /// expensive request-serialization path. Pending steers only need to match the
-    /// committed app-server `UserMessage` item emitted after input drains, which
-    /// preserves flattened text and total image count.
+    /// Build the legacy content key for app servers that do not echo submission IDs.
     pub(super) fn pending_steer_compare_key_from_items(
         items: &[UserInput],
     ) -> PendingSteerCompareKey {
@@ -655,7 +708,10 @@ impl ChatWidget {
             match item {
                 UserInput::Text { text, .. } => message.push_str(text),
                 UserInput::Image { .. } | UserInput::LocalImage { .. } => image_count += 1,
-                UserInput::Skill { .. } | UserInput::Mention { .. } => {}
+                UserInput::Audio { .. } // TODO: Include audio inputs in pending steer comparison.
+                | UserInput::LocalAudio { .. } // TODO: Include audio inputs in pending steer comparison.
+                | UserInput::Skill { .. }
+                | UserInput::Mention { .. } => {}
             }
         }
 
@@ -666,6 +722,12 @@ impl ChatWidget {
     }
 
     pub(crate) fn user_message_display_from_inputs(items: &[UserInput]) -> UserMessageDisplay {
+        if items
+            .iter()
+            .any(|item| matches!(item, UserInput::Audio { .. } | UserInput::LocalAudio { .. }))
+        {
+            tracing::warn!("audio user inputs are not supported by the TUI and will be omitted");
+        }
         let mut message = String::new();
         let mut remote_image_urls = Vec::new();
         let mut local_images = Vec::new();
@@ -694,9 +756,14 @@ impl ChatWidget {
                 ),
                 UserInput::Image { url, .. } => remote_image_urls.push(url.clone()),
                 UserInput::LocalImage { path, .. } => local_images.push(path.clone()),
-                UserInput::Skill { .. } | UserInput::Mention { .. } => {}
+                UserInput::Audio { .. } // TODO: Include audio inputs in the user message display.
+                | UserInput::LocalAudio { .. } // TODO: Include audio inputs in the user message display.
+                | UserInput::Skill { .. }
+                | UserInput::Mention { .. } => {}
             }
         }
+
+        (message, text_elements) = crate::task_mentions::decode_task_links(&message, text_elements);
 
         Self::user_message_display_from_parts(
             message,

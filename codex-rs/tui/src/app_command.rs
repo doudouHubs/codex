@@ -30,6 +30,7 @@ pub(crate) enum AppCommand {
         command: String,
     },
     UserTurn {
+        client_user_message_id: String,
         items: Vec<UserInput>,
         cwd: PathBuf,
         approval_policy: AskForApproval,
@@ -90,7 +91,6 @@ pub(crate) enum AppCommand {
     SetThreadName {
         name: String,
     },
-    Shutdown,
     Review {
         target: ReviewTarget,
     },
@@ -114,6 +114,7 @@ impl AppCommand {
 
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn user_turn(
+        client_user_message_id: String,
         items: Vec<UserInput>,
         cwd: PathBuf,
         approval_policy: AskForApproval,
@@ -127,6 +128,7 @@ impl AppCommand {
         personality: Option<Personality>,
     ) -> Self {
         Self::UserTurn {
+            client_user_message_id,
             items,
             cwd,
             approval_policy,
@@ -230,11 +232,6 @@ impl AppCommand {
 
     pub(crate) fn set_thread_name(name: String) -> Self {
         Self::SetThreadName { name }
-    }
-
-    #[allow(dead_code)]
-    pub(crate) fn shutdown() -> Self {
-        Self::Shutdown
     }
 
     pub(crate) fn review(target: ReviewTarget) -> Self {

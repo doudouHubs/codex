@@ -9,11 +9,11 @@
 //!
 //! Backtrack operates as a small state machine:
 //! - The first `Esc` in the main view "primes" the feature and captures a base thread id.
-//! - A subsequent `Esc` opens the transcript overlay (`Ctrl+E`) and highlights a user message when
+//! - A subsequent `Esc` opens the transcript overlay (`Ctrl+T`) and highlights a user message when
 //!   there is a prompt to reuse.
 //! - `Enter` requests a fork before the selected prompt and reopens it for editing.
 //!
-//! The transcript overlay (`Ctrl+E`) renders committed transcript cells plus a render-only live
+//! The transcript overlay (`Ctrl+T`) renders committed transcript cells plus a render-only live
 //! tail derived from the current in-flight `ChatWidget.active_cell`.
 //!
 //! That live tail is kept in sync during `TuiEvent::Draw` handling for `Overlay::Transcript` by
@@ -21,11 +21,14 @@
 //! `TranscriptOverlay::sync_live_tail`. This preserves the invariant that the overlay reflects
 //! both committed history and in-flight activity without changing flush or coalescing behavior.
 
+mod legacy_input;
+
 use std::any::TypeId;
 use std::sync::Arc;
 
 use crate::app::App;
 use crate::app_event::AppEvent;
+use crate::app_server_session::AppServerSession;
 use crate::bottom_pane::LocalImageAttachment;
 use crate::chatwidget::ChatWidget;
 use crate::chatwidget::UserMessage;
@@ -35,6 +38,7 @@ use crate::history_cell::AgentMessageCell;
 use crate::history_cell::SessionInfoCell;
 use crate::history_cell::UserHistoryCell;
 use crate::pager_overlay::Overlay;
+use crate::pager_overlay::TranscriptHistoryState;
 use crate::tui;
 use crate::tui::TuiEvent;
 use codex_app_server_protocol::ThreadItem;
@@ -88,61 +92,10 @@ impl App {
     pub(crate) async fn handle_backtrack_overlay_event(
         &mut self,
         tui: &mut tui::Tui,
+        app_server: &mut AppServerSession,
         event: TuiEvent,
     ) -> Result<bool> {
-        if self.backtrack.overlay_preview_active {
-            match event {
-                TuiEvent::Key(KeyEvent {
-                    code: KeyCode::Esc,
-                    kind: KeyEventKind::Press | KeyEventKind::Repeat,
-                    ..
-                }) => {
-                    self.overlay_step_backtrack(tui, event)?;
-                    Ok(true)
-                }
-                TuiEvent::Key(KeyEvent {
-                    code: KeyCode::Left,
-                    kind: KeyEventKind::Press | KeyEventKind::Repeat,
-                    ..
-                }) => {
-                    self.overlay_step_backtrack(tui, event)?;
-                    Ok(true)
-                }
-                TuiEvent::Key(KeyEvent {
-                    code: KeyCode::Right,
-                    kind: KeyEventKind::Press | KeyEventKind::Repeat,
-                    ..
-                }) => {
-                    self.overlay_step_backtrack_forward(tui, event)?;
-                    Ok(true)
-                }
-                TuiEvent::Key(KeyEvent {
-                    code: KeyCode::Enter,
-                    kind: KeyEventKind::Press,
-                    ..
-                }) => {
-                    self.overlay_confirm_backtrack(tui);
-                    Ok(true)
-                }
-                _ => {
-                    self.overlay_forward_event(tui, event)?;
-                    Ok(true)
-                }
-            }
-        } else if let TuiEvent::Key(KeyEvent {
-            code: KeyCode::Esc,
-            kind: KeyEventKind::Press | KeyEventKind::Repeat,
-            ..
-        }) = event
-        {
-            // First Esc in transcript overlay: begin backtrack preview at latest user message.
-            self.begin_overlay_backtrack_preview(tui);
-            Ok(true)
-        } else {
-            // Not in backtrack mode: forward events to the overlay widget.
-            self.overlay_forward_event(tui, event)?;
-            Ok(true)
-        }
+        self.handle_legacy_transcript_event(tui, app_server, event)
     }
 
     /// Handle global Esc presses for backtracking when no overlay is present.
@@ -193,9 +146,17 @@ impl App {
 
     /// Open transcript overlay (enters alternate screen and shows full transcript).
     pub(crate) fn open_transcript_overlay(&mut self, tui: &mut tui::Tui) {
-        let overlay =
-            Overlay::new_transcript(self.transcript_cells.clone(), self.keymap.pager.clone());
-        self.activate_overlay(tui, overlay);
+        let _ = tui.enter_alt_screen();
+        self.overlay = Some(Overlay::new_transcript(
+            self.transcript_cells.clone(),
+            self.keymap.pager.clone(),
+        ));
+        if self.scrollback_has_older_history
+            && let Some(Overlay::Transcript(overlay)) = self.overlay.as_mut()
+        {
+            overlay.set_history_state(TranscriptHistoryState::Partial);
+        }
+        tui.frame_requester().schedule_frame();
     }
 
     /// Close transcript overlay and restore normal UI.
@@ -210,6 +171,11 @@ impl App {
             );
         }
         self.overlay = None;
+        if self.pending_thread_usage_history_refresh
+            && let Err(err) = self.refresh_thread_usage_history_tail(tui)
+        {
+            tracing::warn!(error = %err, "failed to refresh thread usage after closing overlay");
+        }
         self.backtrack.overlay_preview_active = false;
         tui.frame_requester().schedule_frame();
         if was_backtrack {
@@ -310,7 +276,7 @@ impl App {
     }
 
     /// Apply a computed backtrack selection to the overlay and internal counter.
-    fn apply_backtrack_selection_internal(&mut self, nth_user_message: usize) {
+    pub(crate) fn apply_backtrack_selection_internal(&mut self, nth_user_message: usize) {
         if let Some(cell_idx) = nth_user_position(&self.transcript_cells, nth_user_message) {
             self.backtrack.nth_user_message = nth_user_message;
             if let Some(Overlay::Transcript(t)) = &mut self.overlay {
@@ -331,15 +297,17 @@ impl App {
     ///
     /// `TranscriptOverlay` owns committed transcript cells, while `ChatWidget` owns the current
     /// in-flight active cell (often a coalesced exec/tool group). During draws we append that
-    /// in-flight cell as a cached, render-only live tail so `Ctrl+E` does not appear to "lose" tool
+    /// in-flight cell as a cached, render-only live tail so `Ctrl+T` does not appear to "lose" tool
     /// calls until a later flush boundary.
     ///
     /// This logic lives here (instead of inside the overlay widget) because `ChatWidget` is the
     /// source of truth for the active cell and its cache invalidation key, and because `App` owns
     /// overlay lifecycle and frame scheduling for animations.
     fn overlay_forward_event(&mut self, tui: &mut tui::Tui, event: TuiEvent) -> Result<()> {
-        if matches!(&event, TuiEvent::Draw | TuiEvent::Resize)
-            && let Some(Overlay::Transcript(t)) = &mut self.overlay
+        if matches!(
+            &event,
+            TuiEvent::Draw | TuiEvent::Resume | TuiEvent::Resize(_) | TuiEvent::FocusGained
+        ) && let Some(Overlay::Transcript(t)) = &mut self.overlay
         {
             let active_key = self.chat_widget.active_cell_transcript_key();
             let chat_widget = &self.chat_widget;
@@ -579,7 +547,7 @@ fn has_backtrack_target(cells: &[Arc<dyn crate::history_cell::HistoryCell>]) -> 
     user_count(cells) > 0
 }
 
-fn nth_user_position(
+pub(crate) fn nth_user_position(
     cells: &[Arc<dyn crate::history_cell::HistoryCell>],
     nth: usize,
 ) -> Option<usize> {

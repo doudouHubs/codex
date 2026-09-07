@@ -125,7 +125,21 @@ impl Default for CrosstermEventSource {
 
 impl EventSource for CrosstermEventSource {
     fn poll_next(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<EventResult>> {
-        Pin::new(&mut self.get_mut().0).poll_next(cx)
+        // Crossterm's Windows backend expects Win32 input records. If VT input is inherited or
+        // restored by another console client, navigation keys arrive as literal escape bytes.
+        #[cfg(windows)]
+        let _ = super::windows_console::ensure_input_record_mode();
+
+        let result = Pin::new(&mut self.get_mut().0).poll_next(cx);
+
+        // EventStream starts its blocking reader before returning Pending, so reassert the mode
+        // after that transition as well.
+        #[cfg(windows)]
+        if result.is_pending() {
+            let _ = super::windows_console::ensure_input_record_mode();
+        }
+
+        result
     }
 }
 
@@ -146,10 +160,6 @@ pub struct TuiEventStream<S: EventSource + Default + Unpin = CrosstermEventSourc
     suspend_context: crate::tui::job_control::SuspendContext,
     #[cfg(unix)]
     alt_screen_active: Arc<AtomicBool>,
-    #[cfg(unix)]
-    alternate_scroll_enabled: Arc<AtomicBool>,
-    #[cfg(unix)]
-    mouse_capture_enabled: Arc<AtomicBool>,
 }
 
 impl<S: EventSource + Default + Unpin> TuiEventStream<S> {
@@ -159,8 +169,6 @@ impl<S: EventSource + Default + Unpin> TuiEventStream<S> {
         terminal_focused: Arc<AtomicBool>,
         #[cfg(unix)] suspend_context: crate::tui::job_control::SuspendContext,
         #[cfg(unix)] alt_screen_active: Arc<AtomicBool>,
-        #[cfg(unix)] alternate_scroll_enabled: Arc<AtomicBool>,
-        #[cfg(unix)] mouse_capture_enabled: Arc<AtomicBool>,
     ) -> Self {
         let resume_stream = WatchStream::from_changes(broker.resume_events_rx());
         Self {
@@ -173,20 +181,16 @@ impl<S: EventSource + Default + Unpin> TuiEventStream<S> {
             suspend_context,
             #[cfg(unix)]
             alt_screen_active,
-            #[cfg(unix)]
-            alternate_scroll_enabled,
-            #[cfg(unix)]
-            mouse_capture_enabled,
         }
     }
 
     /// Poll the shared crossterm stream for the next mapped `TuiEvent`.
     ///
-    /// This skips events we don't use and keeps polling until it yields
+    /// This skips events we don't use (mouse events, etc.) and keeps polling until it yields
     /// a mapped event, hits `Pending`, or sees EOF/error. When the broker is paused, it drops
     /// the underlying stream and returns `Pending` to fully release stdin.
     pub fn poll_crossterm_event(&mut self, cx: &mut Context<'_>) -> Poll<Option<TuiEvent>> {
-        // Some crossterm events map to None (e.g. FocusLost); loop so we keep polling
+        // Some crossterm events map to None (e.g. mouse); loop so we keep polling
         // until we return a mapped event, hit Pending, or see EOF/error.
         loop {
             let poll_result = {
@@ -243,18 +247,14 @@ impl<S: EventSource + Default + Unpin> TuiEventStream<S> {
         }
     }
 
-    /// Map a crossterm event to a [`TuiEvent`], skipping events we don't use.
+    /// Map a crossterm event to a [`TuiEvent`], skipping events we don't use (mouse events, etc.).
     fn map_crossterm_event(&mut self, event: Event) -> Option<TuiEvent> {
         match event {
             Event::Key(key_event) => {
                 #[cfg(unix)]
                 if crate::tui::job_control::SUSPEND_KEY.is_press(key_event) {
                     self.broker.pause_events();
-                    let suspend_result = self.suspend_context.suspend(
-                        &self.alt_screen_active,
-                        &self.alternate_scroll_enabled,
-                        &self.mouse_capture_enabled,
-                    );
+                    let suspend_result = self.suspend_context.suspend(&self.alt_screen_active);
                     self.broker.resume_events();
                     if let Err(err) = suspend_result {
                         tracing::warn!(
@@ -263,22 +263,25 @@ impl<S: EventSource + Default + Unpin> TuiEventStream<S> {
                             "failed to suspend TUI process"
                         );
                     }
-                    return Some(TuiEvent::Draw);
+                    return Some(TuiEvent::Resume);
                 }
                 Some(TuiEvent::Key(key_event))
             }
-            Event::Resize(_, _) => Some(TuiEvent::Resize),
+            Event::Resize(width, height) => {
+                Some(TuiEvent::Resize(ratatui::layout::Size { width, height }))
+            }
             Event::Paste(pasted) => Some(TuiEvent::Paste(pasted)),
-            Event::Mouse(mouse_event) => Some(TuiEvent::Mouse(mouse_event)),
             Event::FocusGained => {
                 self.terminal_focused.store(true, Ordering::Relaxed);
-                crate::terminal_palette::requery_default_colors();
-                Some(TuiEvent::Draw)
+                // Keep the startup-cached palette: querying terminal colors here blocks the
+                // input loop, and a direct probe would discard keys typed during the refresh.
+                Some(TuiEvent::FocusGained)
             }
             Event::FocusLost => {
                 self.terminal_focused.store(false, Ordering::Relaxed);
-                None
+                Some(TuiEvent::FocusLost)
             }
+            _ => None,
         }
     }
 }
@@ -391,10 +394,6 @@ mod tests {
             crate::tui::job_control::SuspendContext::new(),
             #[cfg(unix)]
             Arc::new(AtomicBool::new(false)),
-            #[cfg(unix)]
-            Arc::new(AtomicBool::new(true)),
-            #[cfg(unix)]
-            Arc::new(AtomicBool::new(false)),
         )
     }
 
@@ -422,7 +421,12 @@ mod tests {
         let (broker, handle, _draw_tx, draw_rx, terminal_focused) = setup();
         let mut stream = make_stream(broker, draw_rx, terminal_focused);
 
-        handle.send(Ok(Event::FocusLost));
+        handle.send(Ok(Event::Mouse(MouseEvent {
+            kind: MouseEventKind::Moved,
+            column: 0,
+            row: 0,
+            modifiers: KeyModifiers::NONE,
+        })));
         handle.send(Ok(Event::Key(KeyEvent::new(
             KeyCode::Char('a'),
             KeyModifiers::NONE,
@@ -434,6 +438,64 @@ mod tests {
                 assert_eq!(key, KeyEvent::new(KeyCode::Char('a'), KeyModifiers::NONE));
             }
             other => panic!("expected key event, got {other:?}"),
+        }
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn focus_lost_is_forwarded_and_updates_terminal_state() {
+        let (broker, handle, _draw_tx, draw_rx, terminal_focused) = setup();
+        let mut stream = make_stream(broker, draw_rx, terminal_focused.clone());
+
+        handle.send(Ok(Event::FocusLost));
+
+        assert!(matches!(stream.next().await, Some(TuiEvent::FocusLost)));
+        assert!(!terminal_focused.load(Ordering::Relaxed));
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn focus_lost_consumed_by_startup_remains_visible_to_the_tui() {
+        let (broker, handle, _draw_tx, draw_rx, terminal_focused) = setup();
+        let mut tui = crate::tui::test_support::make_test_tui().expect("test tui");
+        tui.terminal_focused = terminal_focused.clone();
+        let mut startup_events = make_stream(broker, draw_rx, terminal_focused);
+
+        assert!(tui.is_terminal_focused());
+        handle.send(Ok(Event::FocusLost));
+
+        assert!(matches!(
+            startup_events.next().await,
+            Some(TuiEvent::FocusLost)
+        ));
+        assert!(!tui.is_terminal_focused());
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn focus_gained_preserves_already_queued_key() {
+        let (broker, handle, _draw_tx, draw_rx, terminal_focused) = setup();
+        terminal_focused.store(false, Ordering::Relaxed);
+        let mut stream = make_stream(broker.clone(), draw_rx, terminal_focused.clone());
+        let expected_key = KeyEvent::new(KeyCode::Char('f'), KeyModifiers::NONE);
+
+        handle.send(Ok(Event::FocusGained));
+        handle.send(Ok(Event::Key(expected_key)));
+
+        assert!(matches!(stream.next().await, Some(TuiEvent::FocusGained)));
+        assert!(terminal_focused.load(Ordering::Relaxed));
+        assert!(matches!(
+            &*broker
+                .state
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner),
+            EventBrokerState::Running(_)
+        ));
+
+        let next = timeout(Duration::from_millis(/*millis*/ 100), stream.next())
+            .await
+            .expect("focus handling discarded an already queued key");
+
+        match next {
+            Some(TuiEvent::Key(key)) => assert_eq!(key, expected_key),
+            other => panic!("expected queued key event, got {other:?}"),
         }
     }
 
@@ -488,26 +550,13 @@ mod tests {
         handle.send(Ok(Event::Resize(80, 24)));
 
         let next = stream.next().await;
-        assert!(matches!(next, Some(TuiEvent::Resize)));
-    }
-
-    #[tokio::test(flavor = "current_thread")]
-    async fn mouse_event_maps_to_mouse() {
-        let (broker, handle, _draw_tx, draw_rx, terminal_focused) = setup();
-        let mut stream = make_stream(broker, draw_rx, terminal_focused);
-        let expected = MouseEvent {
-            kind: MouseEventKind::ScrollDown,
-            column: 7,
-            row: 9,
-            modifiers: KeyModifiers::NONE,
-        };
-
-        handle.send(Ok(Event::Mouse(expected)));
-
-        match stream.next().await {
-            Some(TuiEvent::Mouse(actual)) => assert_eq!(actual, expected),
-            other => panic!("expected mouse event, got {other:?}"),
-        }
+        assert!(matches!(
+            next,
+            Some(TuiEvent::Resize(ratatui::layout::Size {
+                width: 80,
+                height: 24
+            }))
+        ));
     }
 
     #[tokio::test(flavor = "current_thread")]
