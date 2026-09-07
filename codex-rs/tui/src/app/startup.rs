@@ -420,6 +420,8 @@ See the Codex keymap documentation for supported actions and examples."
             has_emitted_history_lines: false,
             transcript_reflow: TranscriptReflowState::default(),
             initial_history_replay_buffer: None,
+            latest_history_turn_start: None,
+            latest_history_turn_id: None,
             scrollback_has_older_history: false,
             commit_anim_running: Arc::new(AtomicBool::new(false)),
             status_line_invalid_items_warned: status_line_invalid_items_warned.clone(),

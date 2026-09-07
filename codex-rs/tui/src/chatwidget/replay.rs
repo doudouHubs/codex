@@ -12,18 +12,12 @@ impl ChatWidget {
     /// avoid triggering side effects. Event ids are passed as `None` to
     /// distinguish replayed events from live ones.
     pub(crate) fn replay_thread_turns(&mut self, turns: Vec<Turn>, replay_kind: ReplayKind) {
-        let latest_turn_id = if matches!(replay_kind, ReplayKind::ResumeInitialMessages) {
-            turns.last().map(|turn| turn.id.clone())
-        } else {
-            None
-        };
         let hidden_nested_review_turns = std::iter::once(/*value*/ false)
             .chain(turns.windows(/*size*/ 2).map(|turns| {
                 crate::app_backtrack::is_hidden_nested_review_turn(&turns[0], &turns[1])
             }))
             .collect::<Vec<_>>();
         for (turn, hidden_nested_review_turn) in turns.into_iter().zip(hidden_nested_review_turns) {
-            let replay_initial_messages = latest_turn_id.is_some();
             let Turn {
                 id: turn_id,
                 items_view: _,
@@ -34,13 +28,6 @@ impl ChatWidget {
                 completed_at,
                 duration_ms,
             } = turn;
-            if replay_initial_messages && let Some(latest_turn_id) = latest_turn_id.as_ref() {
-                self.app_event_tx
-                    .send(crate::app_event::AppEvent::BeginInitialHistoryReplayTurn {
-                        turn_id: turn_id.clone(),
-                        latest_turn_id: latest_turn_id.clone(),
-                    });
-            }
             if matches!(status, TurnStatus::InProgress) {
                 self.turn_lifecycle.last_turn_id = Some(turn_id.clone());
                 self.last_non_retry_error = None;
@@ -78,10 +65,6 @@ impl ChatWidget {
                     Some(replay_kind),
                 );
             }
-            if replay_initial_messages {
-                self.app_event_tx
-                    .send(crate::app_event::AppEvent::EndInitialHistoryReplayTurn);
-            }
         }
     }
 
@@ -104,7 +87,7 @@ impl ChatWidget {
         let replay_kind = render_source.replay_kind();
         match item {
             ThreadItem::UserMessage { content, .. } => {
-                self.on_committed_user_message(&content, from_replay);
+                self.on_committed_user_message(&content, from_replay, &turn_id);
             }
             ThreadItem::AgentMessage {
                 id,

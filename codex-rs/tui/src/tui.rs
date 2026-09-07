@@ -664,6 +664,7 @@ pub struct Tui {
     event_broker: Arc<EventBroker>,
     pub(crate) terminal: Terminal,
     pending_history_lines: Vec<PendingHistoryLines>,
+    pending_scrollback_clear: bool,
     screen_size: ScreenSizePolicy,
     ambient_pet_image_state: crate::pets::PetImageRenderState,
     pet_picker_preview_image_state: crate::pets::PetImageRenderState,
@@ -727,6 +728,7 @@ impl Tui {
             event_broker: Arc::new(EventBroker::new()),
             terminal,
             pending_history_lines: vec![],
+            pending_scrollback_clear: false,
             screen_size: ScreenSizePolicy::default(),
             ambient_pet_image_state: crate::pets::PetImageRenderState::default(),
             pet_picker_preview_image_state: crate::pets::PetImageRenderState::default(),
@@ -1127,6 +1129,37 @@ impl Tui {
         self.pending_history_lines.clear();
     }
 
+    /// Defer the destructive scrollback clear until the next synchronized draw.
+    ///
+    /// Thread replay and resize reflow both need to replace the terminal-owned scrollback. Clearing
+    /// here would expose a blank frame while replay events are still rebuilding the source-backed
+    /// history, so the clear is committed immediately before the queued replacement lines flush.
+    pub(crate) fn defer_scrollback_clear(&mut self) {
+        self.pending_scrollback_clear = true;
+        self.pending_history_lines.clear();
+        self.frame_requester.schedule_frame();
+    }
+
+    pub(crate) fn cancel_deferred_scrollback_clear(&mut self) {
+        self.pending_scrollback_clear = false;
+    }
+
+    fn apply_pending_scrollback_clear(&mut self) -> Result<()> {
+        if !self.pending_scrollback_clear || self.is_alt_screen_active() {
+            return Ok(());
+        }
+
+        // 回放期间保留旧画面，提交时一次性清理并写入最新 turn，避免用户看到空白中间帧。
+        self.terminal.clear_scrollback_and_visible_screen_ansi()?;
+        let mut area = self.terminal.viewport_area;
+        if area.y > 0 {
+            area.y = 0;
+            self.terminal.set_viewport_area(area);
+        }
+        self.pending_scrollback_clear = false;
+        Ok(())
+    }
+
     /// Resize the inline viewport for the resize-reflow path.
     ///
     /// Unlike the legacy draw path, this path does not scroll rows above the viewport when the
@@ -1222,6 +1255,10 @@ impl Tui {
                 prepared.apply(&mut self.terminal, screen_size)?;
             }
 
+            self.apply_pending_scrollback_clear()?;
+            // Overlay/侧栏拥有 alternate screen 时，待提交的主屏历史必须继续留在队列中，
+            // 否则会把最新 turn 写进临时页面，退出后主屏反而丢失这次重建结果。
+            let should_flush_history = !self.is_alt_screen_active();
             let terminal = &mut self.terminal;
             if let Some(new_area) = pending_viewport_area.take() {
                 terminal.set_viewport_area(new_area);
@@ -1245,11 +1282,13 @@ impl Tui {
                 terminal.set_viewport_area(area);
             }
 
-            Self::flush_pending_history_lines(
-                terminal,
-                &mut self.pending_history_lines,
-                self.is_zellij,
-            )?;
+            if should_flush_history {
+                Self::flush_pending_history_lines(
+                    terminal,
+                    &mut self.pending_history_lines,
+                    self.is_zellij,
+                )?;
+            }
 
             // Update the y position for suspending so Ctrl-Z can place the cursor correctly.
             #[cfg(unix)]
@@ -1353,6 +1392,10 @@ impl Tui {
                 prepared.apply(&mut self.terminal, screen_size)?;
             }
 
+            self.apply_pending_scrollback_clear()?;
+            // alternate screen 的绘制只更新 overlay 自己的 buffer；主屏待写历史要等退出
+            // 临时页面后再提交，不能在这里污染 alternate screen。
+            let should_flush_history = !self.is_alt_screen_active();
             let terminal = &mut self.terminal;
             let needs_full_repaint =
                 Self::update_inline_viewport_for_resize_reflow(terminal, height, screen_size)?;
@@ -1360,11 +1403,13 @@ impl Tui {
             // viewport, so replayed rows can leave stale cells inside the composer.
             let history_can_overlap_viewport =
                 !self.pending_history_lines.is_empty() && terminal.viewport_area.top() <= 1;
-            Self::flush_pending_history_lines(
-                terminal,
-                &mut self.pending_history_lines,
-                self.is_zellij,
-            )?;
+            if should_flush_history {
+                Self::flush_pending_history_lines(
+                    terminal,
+                    &mut self.pending_history_lines,
+                    self.is_zellij,
+                )?;
+            }
 
             if needs_full_repaint || history_can_overlap_viewport {
                 terminal.invalidate_viewport();

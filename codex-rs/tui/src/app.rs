@@ -178,7 +178,6 @@ use crossterm::event::KeyEvent;
 use crossterm::event::KeyEventKind;
 use crossterm::event::KeyModifiers;
 use crossterm::event::ModifierKeyCode;
-use ratatui::backend::Backend;
 use ratatui::layout::Rect;
 use ratatui::layout::Size;
 use ratatui::style::Stylize;
@@ -189,7 +188,6 @@ use std::collections::BTreeMap;
 use std::collections::HashMap;
 use std::collections::HashSet;
 use std::collections::VecDeque;
-use std::io::Write;
 use std::path::Path;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -518,16 +516,7 @@ struct SessionSummary {
 }
 
 #[derive(Debug, Default)]
-struct InitialHistoryReplayBuffer {
-    retained_lines: VecDeque<crate::terminal_hyperlinks::HyperlinkLine>,
-    render_from_transcript_tail: bool,
-    was_truncated: bool,
-    latest_turn_id: Option<String>,
-    current_turn_id: Option<String>,
-    has_hidden_history: bool,
-    visible_cells: Vec<Arc<dyn HistoryCell>>,
-    has_emitted_history_lines_before_replay: bool,
-}
+pub(super) struct InitialHistoryReplayBuffer;
 
 pub(crate) struct App {
     model_catalog: Arc<ModelCatalog>,
@@ -567,6 +556,10 @@ pub(crate) struct App {
     has_emitted_history_lines: bool,
     transcript_reflow: TranscriptReflowState,
     initial_history_replay_buffer: Option<InitialHistoryReplayBuffer>,
+    /// First visible user cell of the latest server turn, used to rebuild only that turn on clear.
+    latest_history_turn_start: Option<Arc<dyn HistoryCell>>,
+    /// Server turn id paired with `latest_history_turn_start`; `None` means the cell was optimistic.
+    latest_history_turn_id: Option<String>,
     pub(crate) scrollback_has_older_history: bool,
 
     pub(crate) enhanced_keys_supported: bool,

@@ -876,28 +876,21 @@ pub(crate) enum AppEvent {
         result: Result<crate::rules_sidebar::RulesSidebarLoad, String>,
     },
 
-    /// Begin buffering initial resume replay rows before they are written to scrollback.
+    /// Begin buffering replay history before it is written to terminal scrollback.
     BeginInitialHistoryReplayBuffer,
-
-    /// Begin buffering thread-switch replay cells so the final scrollback write can reuse the
-    /// resize-reflow tail renderer.
-    BeginThreadSwitchHistoryReplayBuffer,
-
-    /// 标记当前正在送入 App 的初始 resume 回放 turn。
-    ///
-    /// resume 仍保留所有 turn 到 transcript，但首次 inline 展示只呈现最后一个 turn；使用
-    /// id 让这个展示决定与回放数据本身解耦。
-    BeginInitialHistoryReplayTurn {
-        turn_id: String,
-        latest_turn_id: String,
-    },
-
-    /// 结束一个初始 resume turn 的展示范围。
-    EndInitialHistoryReplayTurn,
 
     InsertHistoryCell(Box<dyn HistoryCell>),
 
-    /// Finish buffering initial resume replay after all replay events have been queued.
+    /// Associate the most recently inserted user cell with its server turn.
+    ///
+    /// This metadata is only used by the main-screen reflow projection. The transcript cells and
+    /// model context remain unchanged, while multiple user messages belonging to one turn can keep
+    /// their shared boundary instead of making a last-cell guess on every rebuild.
+    MarkHistoryTurnStart {
+        turn_id: Option<String>,
+    },
+
+    /// Finish buffering replay history after all replay events have been queued.
     EndInitialHistoryReplayBuffer,
 
     /// Replace the contiguous run of streaming `AgentMessageCell`s at the end of

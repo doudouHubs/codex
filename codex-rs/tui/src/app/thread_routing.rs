@@ -1283,6 +1283,13 @@ impl App {
         if !turns.is_empty() {
             self.chat_widget.set_token_info(/*info*/ None);
         }
+        let should_buffer_initial_replay =
+            !turns.is_empty() || matches!(presentation, ThreadAttachPresentation::PromptEdit);
+        if should_buffer_initial_replay {
+            // 先登记回放事务，再让 session header 进入事件队列，保证回放期间不会先把旧内容写入主屏。
+            self.app_event_tx
+                .send(AppEvent::BeginInitialHistoryReplayBuffer);
+        }
         match presentation {
             ThreadAttachPresentation::SessionLineage
             | ThreadAttachPresentation::PlanImplementation => {
@@ -1291,11 +1298,6 @@ impl App {
             ThreadAttachPresentation::PromptEdit => {
                 self.chat_widget.handle_prompt_edit_thread_session(session);
             }
-        }
-        let should_buffer_initial_replay = !turns.is_empty();
-        if should_buffer_initial_replay {
-            self.app_event_tx
-                .send(AppEvent::BeginInitialHistoryReplayBuffer);
         }
         self.chat_widget
             .replay_thread_turns(turns, ReplayKind::ResumeInitialMessages);
@@ -1519,11 +1521,10 @@ impl App {
         resume_restored_queue: bool,
     ) {
         self.refresh_mcp_startup_expected_servers_from_config();
-        let should_buffer_replay = !snapshot.turns.is_empty() || !snapshot.events.is_empty();
-        if should_buffer_replay {
-            self.app_event_tx
-                .send(AppEvent::BeginThreadSwitchHistoryReplayBuffer);
-        }
+        // 即使 snapshot 没有历史，切线程也必须清掉上一个线程的 scrollback；Begin/End 把
+        // session header、历史 cell 和最新 turn 的提交统一成一个不可见中间态的事务。
+        self.app_event_tx
+            .send(AppEvent::BeginInitialHistoryReplayBuffer);
         let suppress_replay_notices =
             replay_filter::snapshot_has_pending_interactive_request(&snapshot);
         if let Some(session) = snapshot.session {
@@ -1561,10 +1562,8 @@ impl App {
             }
             self.handle_thread_event_replay(event);
         }
-        if should_buffer_replay {
-            self.app_event_tx
-                .send(AppEvent::EndInitialHistoryReplayBuffer);
-        }
+        self.app_event_tx
+            .send(AppEvent::EndInitialHistoryReplayBuffer);
         self.chat_widget
             .set_queue_autosend_suppressed(/*suppressed*/ false);
         self.chat_widget

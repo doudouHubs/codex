@@ -246,13 +246,12 @@ impl App {
                 .rposition(|cell| cell.as_any().is::<SessionInfoCell>())
                 .map_or(/*default*/ 0, |index| index.saturating_add(/*rhs*/ 1));
             self.transcript_cells.splice(index..index, cells);
-            let wrap_width = self.chat_widget.history_wrap_width(width);
-            let rendered_rows = self
-                .render_transcript_lines_for_reflow(wrap_width)
-                .lines
-                .len();
-            self.schedule_immediate_resize_reflow(tui);
-            if self.scrollback_history_needs_top_up(rendered_rows)
+            // 旧页只补齐完整 transcript；主屏仍然只显示最新 turn，不需要因旧数据到达而
+            // 再次清屏重建，避免分页响应把刚稳定的主屏重新滚动一遍。
+            let loaded_scrollback_rows = self.rendered_transcript_rows_for_scrollback(
+                self.chat_widget.history_wrap_width(width),
+            );
+            if self.scrollback_history_needs_top_up(loaded_scrollback_rows)
                 && self.request_older_history_page(app_server, thread_id)
             {
                 return Ok(());

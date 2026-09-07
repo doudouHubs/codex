@@ -32,40 +32,51 @@ impl App {
             tui.frame_requester().schedule_frame();
         }
         self.transcript_cells.push(cell.clone());
-        if !self.should_render_initial_history_cell() {
-            // 旧 turn 只跳过主屏展示；transcript 和已打开的 overlay 仍必须保留完整 cell。
-            self.last_rendered_history_tail = None;
-            self.chat_widget.request_pending_usage_output_insertion();
-            return;
-        }
-        self.record_initial_history_replay_cell(cell.clone());
         let width = self
             .chat_widget
             .history_wrap_width(tui.terminal.last_known_screen_size.width);
+        let is_replaying = self.initial_history_replay_buffer.is_some();
+        let is_composite = cell.as_any().is::<history_cell::CompositeHistoryCell>();
         let lines =
-            cell.display_hyperlink_lines_for_mode(width, self.chat_widget.history_render_mode());
-        if cell.as_any().is::<history_cell::CompositeHistoryCell>()
-            && lines.first().is_some_and(|line| {
-                line.line.spans.len() == 1 && line.line.spans[0].content.as_ref() == "/status"
+            if is_replaying && !is_composite {
+                // 旧 cell 在 replay 期间不会写入主屏，等结束时只从最新 turn 重建一次，避免
+                // 为不可见历史重复执行 Markdown、换行和超链接计算。
+                None
+            } else {
+                Some(cell.display_hyperlink_lines_for_mode(
+                    width,
+                    self.chat_widget.history_render_mode(),
+                ))
+            };
+        if is_composite
+            && lines.as_ref().is_some_and(|lines| {
+                lines.first().is_some_and(|line| {
+                    line.line.spans.len() == 1 && line.line.spans[0].content.as_ref() == "/status"
+                })
             })
             && let Some(thread_id) = self.chat_widget.thread_id()
         {
             self.last_thread_usage_status_cell = Some(ThreadUsageStatusHistory {
                 thread_id,
                 cell: Arc::downgrade(&cell),
-                lines: lines.clone(),
+                lines: lines
+                    .as_ref()
+                    .expect("composite history cells must have rendered lines")
+                    .clone(),
             });
         }
-        if self.initial_history_replay_buffer.as_ref().is_some() {
-            self.insert_history_cell_lines_with_initial_replay_buffer(tui, cell.as_ref(), width);
+        if is_replaying {
+            // replay 期间只更新完整 transcript；主屏在结束事件中从最后一个 turn 一次性重建。
             self.last_rendered_history_tail = None;
         } else {
             self.insert_history_cell_lines(tui, cell.as_ref(), width);
-            self.last_rendered_history_tail = if self.overlay.is_none() && !lines.is_empty() {
-                Some(RenderedHistoryTail {
-                    cell: Arc::downgrade(&cell),
-                    lines,
-                })
+            self.last_rendered_history_tail = if self.overlay.is_none() {
+                lines
+                    .filter(|lines| !lines.is_empty())
+                    .map(|lines| RenderedHistoryTail {
+                        cell: Arc::downgrade(&cell),
+                        lines,
+                    })
             } else {
                 None
             };
@@ -73,6 +84,27 @@ impl App {
         // A committed cell can unblock a settled /usage card that was waiting
         // behind a transient active cell or a provisional stream tail.
         self.chat_widget.request_pending_usage_output_insertion();
+    }
+
+    pub(super) fn refresh_thread_usage_history_cache(&mut self, width: u16) {
+        let Some(mut status_history) = self.last_thread_usage_status_cell.take() else {
+            return;
+        };
+        let Some(status_cell) = status_history.cell.upgrade() else {
+            return;
+        };
+        // 回流或分页删除后，弱引用可能仍被异步刷新任务暂时持有；只有 cell 仍属于当前
+        // transcript，才允许把它重新作为 `/status` 的源缓存，避免已删除的行被复活。
+        if !self
+            .transcript_cells
+            .iter()
+            .any(|cell| Arc::ptr_eq(cell, &status_cell))
+        {
+            return;
+        }
+        status_history.lines = status_cell
+            .display_hyperlink_lines_for_mode(width, self.chat_widget.history_render_mode());
+        self.last_thread_usage_status_cell = Some(status_history);
     }
 
     pub(super) fn finish_thread_usage_refresh(
@@ -293,6 +325,7 @@ impl App {
 
         // Drop queued history insertions so stale transcript lines cannot be flushed after /clear.
         tui.clear_pending_history_lines();
+        tui.cancel_deferred_scrollback_clear();
 
         if is_alt_screen_active {
             tui.terminal.clear_visible_screen()?;
@@ -334,6 +367,7 @@ impl App {
         self.chat_widget.clear_pending_token_activity_refreshes();
         self.chat_widget.clear_pending_rate_limit_reset_hint();
         self.initial_history_replay_buffer = None;
+        self.reset_history_turn_state();
         self.scrollback_has_older_history = false;
         self.backtrack = BacktrackState::default();
         self.backtrack_render_pending = false;

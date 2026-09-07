@@ -403,9 +403,18 @@ impl McpRuntime {
         tool: &str,
         arguments: Option<serde_json::Value>,
         meta: Option<serde_json::Value>,
+        requested_timeout: Option<Duration>,
+        wait_for_server: bool,
     ) -> anyhow::Result<CallToolResult> {
         self.latest_connections()
-            .call_tool(server, tool, arguments, meta)
+            .call_tool(
+                server,
+                tool,
+                arguments,
+                meta,
+                requested_timeout,
+                wait_for_server,
+            )
             .await
     }
 

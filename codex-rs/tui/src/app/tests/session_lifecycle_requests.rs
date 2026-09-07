@@ -978,6 +978,7 @@ async fn underfilled_scrollback_fetches_older_pages_without_opening_the_transcri
     app.config.terminal_resize_reflow.max_rows = TerminalResizeReflowMaxRows::Limit(32);
     let initial_cell_count = app.transcript_cells.len();
     let initial_page_requests = recorded_params(&requests, "thread/items/list").len();
+    while app_event_rx.try_recv().is_ok() {}
     let mut tui = crate::tui::test_support::make_test_tui()?;
 
     app.scrollback_has_older_history = false;
@@ -1049,12 +1050,14 @@ async fn underfilled_scrollback_fetches_older_pages_without_opening_the_transcri
         recorded_params(&requests, "thread/items/list").len(),
         initial_page_requests + 1
     );
-    assert_eq!(
-        app.render_transcript_lines_for_reflow(/*width*/ 80)
-            .lines
-            .len(),
-        32
-    );
+    let rendered = app.render_transcript_lines_for_reflow(/*width*/ 80);
+    let rendered_text = rendered
+        .lines
+        .iter()
+        .map(rendered_line_text)
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert!(rendered_text.contains("scrollback output 119"));
 
     app_server.shutdown().await?;
     proxy.await??;

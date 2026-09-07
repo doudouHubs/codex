@@ -5,6 +5,7 @@ use crate::agents_md_manager::AgentsMdManager;
 use crate::config::ConstraintError;
 use crate::environment_selection::ThreadEnvironments;
 use crate::environment_selection::TurnEnvironmentSnapshot;
+use crate::hook_mcp_executor::CoreHookMcpExecutor;
 use crate::shell_snapshot::ShellSnapshot;
 use crate::state::ActiveTurn;
 use codex_extension_api::ExtensionDataInit;
@@ -1213,7 +1214,11 @@ impl Session {
                     (None, None)
                 };
 
-            let hooks_config = if session_configuration
+            // Hook 与扩展必须共享同一个线程级运行时；这里先创建稳定句柄，后续只替换其连接快照。
+            let mcp_runtime = Arc::new(McpRuntime::empty(
+                mcp_projection.config.prefix_mcp_tool_names,
+            ));
+            let mut hooks_config = if session_configuration
                 .thread_runtime_mode
                 .is_prompt_optimization()
             {
@@ -1226,6 +1231,14 @@ impl Session {
                 )
                 .await
             };
+            if mcp_runtime_mode != McpRuntimeMode::Disabled {
+                // 启用 MCP 的线程才绑定执行器；禁用线程仍保留 command hooks，MCP hook
+                // 则由 Hooks 引擎在启动时跳过，避免执行阶段才报 unknown server。
+                hooks_config.mcp_executor = Some(Arc::new(CoreHookMcpExecutor {
+                    runtime: Arc::clone(&mcp_runtime),
+                    thread_id,
+                }));
+            }
             let (hooks, async_hook_results) = Hooks::new(hooks_config, thread_id)?;
             for warning in hooks.startup_warnings() {
                 post_session_configured_events.push(Event {
@@ -1243,10 +1256,6 @@ impl Session {
                     config.analytics_enabled,
                 )
             });
-            // Extensions need a stable thread-owned resource client before the Session exists.
-            let mcp_runtime = Arc::new(McpRuntime::empty(
-                mcp_projection.config.prefix_mcp_tool_names,
-            ));
             let session_extension_data =
                 codex_extension_api::ExtensionData::new(session_id.to_string());
             session_extension_data.insert(analytics_events_client.clone());

@@ -1,3 +1,33 @@
 {"run_id":"1787721088-78126800","line":239,"new":{"module_name":"codex_tui__app__resize_reflow__tests","snapshot_name":"capped_resize_reflow_prepends_transcript_notice_without_changing_transcript","metadata":{"source":"tui/src/app/resize_reflow_tests.rs","assertion_line":232,"expression":"rendered.lines.iter().map(rendered_line_text).collect::<Vec<_>>().join(\"\\n\")"},"snapshot":"Earlier messages are available — press ctrl + e to view the full transcript\ncell 8\n\ncell 9\n\ncell 10\n\ncell 11"},"old":{"module_name":"codex_tui__app__resize_reflow__tests","metadata":{},"snapshot":"Earlier messages are available — press ctrl + t to view the full transcript\ncell 8\n\ncell 9\n\ncell 10\n\ncell 11"}}
 {"run_id":"1787721088-78126800","line":268,"new":{"module_name":"codex_tui__app__resize_reflow__tests","snapshot_name":"capped_resize_reflow_counts_wrapped_notice_rows","metadata":{"source":"tui/src/app/resize_reflow_tests.rs","assertion_line":261,"expression":"rendered.lines.iter().map(rendered_line_text).collect::<Vec<_>>().join(\"\\n\")"},"snapshot":"Earlier messages are\navailable — press ctrl + e\nto view the full transcript\ncell 9\n\ncell 10\n\ncell 11"},"old":{"module_name":"codex_tui__app__resize_reflow__tests","metadata":{},"snapshot":"Earlier messages are\navailable — press ctrl + t\nto view the full transcript\ncell 9\n\ncell 10\n\ncell 11"}}
 {"run_id":"1787721088-78126800","line":318,"new":{"module_name":"codex_tui__app__resize_reflow__tests","snapshot_name":"paginated_resize_reflow_prepends_transcript_notice_for_unloaded_history","metadata":{"source":"tui/src/app/resize_reflow_tests.rs","assertion_line":311,"expression":"rendered.lines.iter().map(rendered_line_text).collect::<Vec<_>>().join(\"\\n\")"},"snapshot":"Earlier messages are available — press ctrl + e to view the full transcript\ncell 0\n\ncell 1"},"old":{"module_name":"codex_tui__app__resize_reflow__tests","metadata":{},"snapshot":"Earlier messages are available — press ctrl + t to view the full transcript\ncell 0\n\ncell 1"}}
+{"run_id":"799b90d1-fbb5-43d6-b7cd-7a4c5fdf957f","line":234,"new":null,"old":null}
+{"run_id":"799b90d1-fbb5-43d6-b7cd-7a4c5fdf957f","line":205,"new":null,"old":null}
+{"run_id":"799b90d1-fbb5-43d6-b7cd-7a4c5fdf957f","line":99,"new":null,"old":null}
+{"run_id":"799b90d1-fbb5-43d6-b7cd-7a4c5fdf957f","line":264,"new":null,"old":null}
+{"run_id":"799b90d1-fbb5-43d6-b7cd-7a4c5fdf957f","line":284,"new":null,"old":null}
+{"run_id":"1855508c-f704-473c-bcad-1943e83ad462","line":234,"new":null,"old":null}
+{"run_id":"1855508c-f704-473c-bcad-1943e83ad462","line":205,"new":null,"old":null}
+{"run_id":"1855508c-f704-473c-bcad-1943e83ad462","line":99,"new":null,"old":null}
+{"run_id":"1855508c-f704-473c-bcad-1943e83ad462","line":264,"new":null,"old":null}
+{"run_id":"1855508c-f704-473c-bcad-1943e83ad462","line":284,"new":null,"old":null}
+{"run_id":"44ca5151-fd3d-4a82-9556-e01bb8c610c2","line":234,"new":null,"old":null}
+{"run_id":"44ca5151-fd3d-4a82-9556-e01bb8c610c2","line":205,"new":null,"old":null}
+{"run_id":"44ca5151-fd3d-4a82-9556-e01bb8c610c2","line":99,"new":null,"old":null}
+{"run_id":"44ca5151-fd3d-4a82-9556-e01bb8c610c2","line":264,"new":null,"old":null}
+{"run_id":"44ca5151-fd3d-4a82-9556-e01bb8c610c2","line":284,"new":null,"old":null}
+{"run_id":"c1171619-1639-422d-a8ec-1c8c80aaeeaa","line":405,"new":null,"old":null}
+{"run_id":"c1171619-1639-422d-a8ec-1c8c80aaeeaa","line":376,"new":null,"old":null}
+{"run_id":"c1171619-1639-422d-a8ec-1c8c80aaeeaa","line":270,"new":null,"old":null}
+{"run_id":"c1171619-1639-422d-a8ec-1c8c80aaeeaa","line":435,"new":null,"old":null}
+{"run_id":"c1171619-1639-422d-a8ec-1c8c80aaeeaa","line":455,"new":null,"old":null}
+{"run_id":"af72818b-da05-40d1-bdbc-a3c5ca11c1d6","line":405,"new":null,"old":null}
+{"run_id":"af72818b-da05-40d1-bdbc-a3c5ca11c1d6","line":376,"new":null,"old":null}
+{"run_id":"af72818b-da05-40d1-bdbc-a3c5ca11c1d6","line":270,"new":null,"old":null}
+{"run_id":"af72818b-da05-40d1-bdbc-a3c5ca11c1d6","line":435,"new":null,"old":null}
+{"run_id":"af72818b-da05-40d1-bdbc-a3c5ca11c1d6","line":455,"new":null,"old":null}
+{"run_id":"b707f1f4-dc20-4e69-bc4e-cf49c7b65150","line":402,"new":null,"old":null}
+{"run_id":"b707f1f4-dc20-4e69-bc4e-cf49c7b65150","line":373,"new":null,"old":null}
+{"run_id":"b707f1f4-dc20-4e69-bc4e-cf49c7b65150","line":267,"new":null,"old":null}
+{"run_id":"b707f1f4-dc20-4e69-bc4e-cf49c7b65150","line":432,"new":null,"old":null}
+{"run_id":"b707f1f4-dc20-4e69-bc4e-cf49c7b65150","line":452,"new":null,"old":null}

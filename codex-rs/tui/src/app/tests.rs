@@ -4923,6 +4923,8 @@ async fn make_test_app() -> App {
         has_emitted_history_lines: false,
         transcript_reflow: TranscriptReflowState::default(),
         initial_history_replay_buffer: None,
+        latest_history_turn_start: None,
+        latest_history_turn_id: None,
         scrollback_has_older_history: false,
         enhanced_keys_supported: false,
         keymap: crate::keymap::RuntimeKeymap::defaults(),
@@ -5004,6 +5006,8 @@ async fn make_test_app_with_channels() -> (
             has_emitted_history_lines: false,
             transcript_reflow: TranscriptReflowState::default(),
             initial_history_replay_buffer: None,
+            latest_history_turn_start: None,
+            latest_history_turn_id: None,
             scrollback_has_older_history: false,
             enhanced_keys_supported: false,
             keymap: crate::keymap::RuntimeKeymap::defaults(),
@@ -5322,7 +5326,7 @@ async fn capped_resize_reflow_renders_recent_suffix_only() {
             .map(rendered_line_text)
             .collect::<Vec<_>>(),
         vec![
-            "Earlier messages are available — press ctrl + t to view the full transcript"
+            "Earlier messages are available — press ctrl + e to view the full transcript"
                 .to_string(),
             String::new(),
             "cell 18".to_string(),
@@ -5400,90 +5404,133 @@ async fn uncapped_resize_reflow_renders_all_cells_under_row_limit() {
 }
 
 #[tokio::test]
-async fn initial_replay_buffer_keeps_recent_rows_when_row_cap_present() {
+async fn initial_replay_buffer_renders_only_the_latest_turn() -> Result<()> {
     let (mut app, _rx, _op_rx) = make_test_app_with_channels().await;
     app.config.terminal_resize_reflow.max_rows = TerminalResizeReflowMaxRows::Limit(3);
 
     app.begin_initial_history_replay_buffer();
-    for index in 0..5 {
-        App::buffer_initial_history_replay_display_lines(
-            app.initial_history_replay_buffer
-                .as_mut()
-                .expect("initial replay buffer active"),
-            vec![Line::from(format!("line {index}")).into()],
-            /*max_rows*/ 3,
-        );
-    }
-
-    let buffer = app
-        .initial_history_replay_buffer
-        .as_ref()
-        .expect("initial replay buffer should remain active");
-    assert_eq!(
-        buffer
-            .retained_lines
-            .iter()
-            .map(rendered_line_text)
-            .collect::<Vec<_>>(),
-        vec![
-            "line 2".to_string(),
-            "line 3".to_string(),
-            "line 4".to_string(),
-        ]
-    );
-}
-
-#[tokio::test]
-async fn required_stream_reflow_during_capped_initial_replay_uses_transcript_tail() -> Result<()> {
-    let (mut app, _rx, _op_rx) = make_test_app_with_channels().await;
-    app.config.terminal_resize_reflow.max_rows = TerminalResizeReflowMaxRows::Limit(20);
-    app.transcript_cells = vec![
-        plain_line_cell("latest user question"),
-        Arc::new(AgentMarkdownCell::new(
-            "Final answer:\n\n| Pattern | Outcome |\n| --- | --- |\n| Table tail | Preserved |"
-                .to_string(),
-            Path::new("/tmp"),
-        )),
-    ];
-
-    app.begin_initial_history_replay_buffer();
-    App::buffer_initial_history_replay_display_lines(
-        app.initial_history_replay_buffer
-            .as_mut()
-            .expect("initial replay buffer active"),
-        vec![Line::from("latest user question").into()],
-        /*max_rows*/ 20,
-    );
-
     let mut tui = crate::tui::test_support::make_test_tui()?;
-    app.finish_required_stream_reflow(&mut tui)?;
+    let user_cell = |message: &str| {
+        Box::new(UserHistoryCell {
+            message: message.to_string(),
+            text_elements: Vec::new(),
+            local_image_paths: Vec::new(),
+            remote_image_urls: Vec::new(),
+        }) as Box<dyn HistoryCell>
+    };
 
-    let buffer = app
-        .initial_history_replay_buffer
-        .as_ref()
-        .expect("initial replay buffer should remain active");
-    assert_eq!(
-        (
-            buffer.retained_lines.len(),
-            buffer.render_from_transcript_tail
-        ),
-        (0, true),
+    app.insert_history_cell(&mut tui, user_cell("old prompt"));
+    app.insert_history_cell(
+        &mut tui,
+        Box::new(PlainHistoryCell::new(vec![Line::from("old answer")])),
     );
+    app.insert_history_cell(&mut tui, user_cell("latest prompt"));
+    app.insert_history_cell(
+        &mut tui,
+        Box::new(PlainHistoryCell::new(vec![Line::from("latest answer")])),
+    );
+
+    assert!(tui.pending_history_lines_for_test().is_empty());
+    assert_eq!(app.transcript_cells.len(), 4);
 
     let rendered = app.render_transcript_lines_for_reflow(/*width*/ 80);
-    assert_snapshot!(
-        "required_stream_reflow_during_capped_initial_replay",
+    assert_eq!(
         rendered
             .lines
             .iter()
             .map(rendered_line_text)
-            .collect::<Vec<_>>()
-            .join("\n")
+            .collect::<Vec<_>>(),
+        vec![
+            "Earlier messages are available — press ctrl + e to view the full transcript"
+                .to_string(),
+            String::new(),
+            "› latest prompt".to_string(),
+            String::new(),
+            String::new(),
+            "latest answer".to_string(),
+        ]
     );
 
     app.finish_initial_history_replay_buffer(&mut tui);
     assert!(app.initial_history_replay_buffer.is_none());
-    assert!(app.transcript_reflow.has_pending_reflow());
+    assert!(!tui.pending_history_lines_for_test().is_empty());
+    Ok(())
+}
+
+#[tokio::test]
+async fn initial_replay_skips_display_for_old_history_cells() -> Result<()> {
+    #[derive(Debug)]
+    struct CountingReplayHistoryCell {
+        display_calls: Arc<AtomicUsize>,
+    }
+
+    impl HistoryCell for CountingReplayHistoryCell {
+        fn display_lines(&self, _width: u16) -> Vec<Line<'static>> {
+            vec![Line::from("old history")]
+        }
+
+        fn raw_lines(&self) -> Vec<Line<'static>> {
+            vec![Line::from("old history")]
+        }
+
+        fn display_hyperlink_lines_for_mode(
+            &self,
+            _width: u16,
+            _mode: crate::history_cell::HistoryRenderMode,
+        ) -> Vec<crate::terminal_hyperlinks::HyperlinkLine> {
+            self.display_calls.fetch_add(1, Ordering::Relaxed);
+            vec![crate::terminal_hyperlinks::HyperlinkLine::from(
+                "old history",
+            )]
+        }
+    }
+
+    let (mut app, _rx, _op_rx) = make_test_app_with_channels().await;
+    let display_calls = Arc::new(AtomicUsize::new(0));
+    let mut tui = crate::tui::test_support::make_test_tui()?;
+
+    app.begin_initial_history_replay_buffer();
+    app.insert_history_cell(
+        &mut tui,
+        Box::new(CountingReplayHistoryCell {
+            display_calls: Arc::clone(&display_calls),
+        }),
+    );
+    app.insert_history_cell(
+        &mut tui,
+        Box::new(UserHistoryCell {
+            message: "latest prompt".to_string(),
+            text_elements: Vec::new(),
+            local_image_paths: Vec::new(),
+            remote_image_urls: Vec::new(),
+        }),
+    );
+    app.insert_history_cell(
+        &mut tui,
+        Box::new(PlainHistoryCell::new(vec![Line::from("latest answer")])),
+    );
+
+    assert_eq!(display_calls.load(Ordering::Relaxed), 0);
+    assert_eq!(app.transcript_cells.len(), 3);
+
+    app.finish_initial_history_replay_buffer(&mut tui);
+
+    assert_eq!(display_calls.load(Ordering::Relaxed), 0);
+    let pending_history = tui
+        .pending_history_lines_for_test()
+        .into_iter()
+        .map(|line| {
+            line.line
+                .spans
+                .iter()
+                .map(|span| span.content.as_ref())
+                .collect::<String>()
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert!(pending_history.contains("latest prompt"));
+    assert!(pending_history.contains("latest answer"));
+    assert!(!pending_history.contains("old history"));
     Ok(())
 }
 
@@ -5521,92 +5568,6 @@ async fn directive_only_completion_removes_streamed_directive() -> Result<()> {
             .join("\n")
     );
     Ok(())
-}
-
-#[tokio::test]
-async fn required_stream_reflow_during_capped_initial_replay_survives_transcript_overlay()
--> Result<()> {
-    let (mut app, _rx, _op_rx) = make_test_app_with_channels().await;
-    app.config.terminal_resize_reflow.max_rows = TerminalResizeReflowMaxRows::Limit(7);
-    app.transcript_cells = vec![
-        plain_line_cell("latest user question"),
-        Arc::new(AgentMessageCell::new(
-            vec![Line::from("stale streamed table tail")],
-            /*is_first_line*/ true,
-        )),
-    ];
-
-    app.begin_initial_history_replay_buffer();
-    App::buffer_initial_history_replay_display_lines(
-        app.initial_history_replay_buffer
-            .as_mut()
-            .expect("initial replay buffer active"),
-        vec![Line::from("stale streamed table tail").into()],
-        /*max_rows*/ 7,
-    );
-
-    let mut tui = crate::tui::test_support::make_test_tui()?;
-    app.handle_consolidate_agent_message(
-        &mut tui,
-        "Final answer:\n\n| Pattern | Outcome |\n| --- | --- |\n| Table tail | Preserved |"
-            .to_string(),
-        PathBuf::from("/tmp"),
-        /*inline_visualization_context*/ None,
-        ConsolidationScrollbackReflow::Required,
-        /*deferred_history_cell*/ None,
-    )?;
-    app.open_transcript_overlay(&mut tui);
-    assert!(tui.is_alt_screen_active());
-
-    app.finish_initial_history_replay_buffer(&mut tui);
-    assert!(app.initial_history_replay_buffer.is_none());
-    assert!(app.transcript_reflow.has_pending_reflow());
-
-    let screen_size = tui.terminal.last_known_screen_size;
-    app.maybe_run_resize_reflow(&mut tui, screen_size)?;
-    assert!(app.transcript_reflow.has_pending_reflow());
-
-    app.close_transcript_overlay(&mut tui);
-    assert!(!tui.is_alt_screen_active());
-    assert!(app.transcript_reflow.has_pending_reflow());
-
-    let rendered = app.render_transcript_lines_for_reflow(/*width*/ 80);
-    assert_eq!(rendered.lines.len(), 7);
-    assert_snapshot!(
-        "required_stream_reflow_during_capped_initial_replay_survives_transcript_overlay",
-        rendered
-            .lines
-            .iter()
-            .map(rendered_line_text)
-            .collect::<Vec<_>>()
-            .join("\n")
-    );
-    Ok(())
-}
-
-#[tokio::test]
-async fn thread_switch_replay_buffer_uses_transcript_tail_mode_when_row_cap_present() {
-    let (mut app, _rx, _op_rx) = make_test_app_with_channels().await;
-    app.config.terminal_resize_reflow.max_rows = TerminalResizeReflowMaxRows::Limit(3);
-
-    app.begin_thread_switch_history_replay_buffer();
-
-    let buffer = app
-        .initial_history_replay_buffer
-        .as_ref()
-        .expect("thread switch replay buffer should be active");
-    assert!(buffer.render_from_transcript_tail);
-    assert!(buffer.retained_lines.is_empty());
-}
-
-#[tokio::test]
-async fn thread_switch_replay_buffer_is_disabled_without_row_cap() {
-    let (mut app, _rx, _op_rx) = make_test_app_with_channels().await;
-    app.config.terminal_resize_reflow.max_rows = TerminalResizeReflowMaxRows::Disabled;
-
-    app.begin_thread_switch_history_replay_buffer();
-
-    assert!(app.initial_history_replay_buffer.is_none());
 }
 
 #[tokio::test]

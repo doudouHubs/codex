@@ -265,6 +265,7 @@ pub(crate) struct PreviousTurnSettings {
 
 use crate::exec_policy::ExecPolicyUpdateError;
 use crate::guardian::GuardianReviewSessionManager;
+use crate::hook_mcp_executor::CoreHookMcpExecutor;
 use crate::mcp::McpManager;
 use crate::mcp::McpThreadIdentity;
 use crate::network_policy_decision::execpolicy_network_rule_amendment;
@@ -1809,12 +1810,19 @@ impl Session {
 
     pub(crate) async fn refresh_hooks(&self, config: Arc<Config>) {
         let environments = self.services.turn_environments.snapshot().await;
-        let hooks_config = build_hooks_config(
+        let mut hooks_config = build_hooks_config(
             config.as_ref(),
             self.services.plugins_manager.as_ref(),
             environments.single_local_environment(),
         )
         .await;
+        if self.mcp_runtime_mode != McpRuntimeMode::Disabled {
+            // 配置刷新会重建 Hooks；必须重新绑定同一个线程运行时，否则 MCP hook 会退回被丢弃。
+            hooks_config.mcp_executor = Some(Arc::new(CoreHookMcpExecutor {
+                runtime: Arc::clone(&self.services.mcp_runtime),
+                thread_id: self.thread_id,
+            }));
+        }
 
         let state = self.state.lock().await;
         // A newer refresh may have updated the config while this hook build was in flight.
@@ -3658,6 +3666,8 @@ impl Session {
                     Some(serde_json::json!({
                         "threadId": self.thread_id().to_string(),
                     })),
+                    /*requested_timeout*/ None,
+                    /*wait_for_server*/ true,
                 )
                 .await
                 .ok()

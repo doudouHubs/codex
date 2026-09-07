@@ -497,20 +497,11 @@ impl App {
             AppEvent::BeginInitialHistoryReplayBuffer => {
                 self.begin_initial_history_replay_buffer();
             }
-            AppEvent::BeginThreadSwitchHistoryReplayBuffer => {
-                self.begin_thread_switch_history_replay_buffer();
-            }
-            AppEvent::BeginInitialHistoryReplayTurn {
-                turn_id,
-                latest_turn_id,
-            } => {
-                self.begin_initial_history_replay_turn(turn_id, latest_turn_id);
-            }
-            AppEvent::EndInitialHistoryReplayTurn => {
-                self.end_initial_history_replay_turn();
-            }
             AppEvent::InsertHistoryCell(cell) => {
                 self.insert_history_cell(tui, cell);
+            }
+            AppEvent::MarkHistoryTurnStart { turn_id } => {
+                self.mark_history_turn_start(turn_id);
             }
             AppEvent::EndInitialHistoryReplayBuffer => {
                 self.scrollback_has_older_history = self
@@ -546,11 +537,6 @@ impl App {
                     Arc::new(history_cell::new_proposed_plan(source, &self.config.cwd));
 
                 if start < end {
-                    let replaced_cells = self.transcript_cells[start..end].to_vec();
-                    self.replace_initial_history_replay_cells(
-                        &replaced_cells,
-                        Some(consolidated.clone()),
-                    );
                     self.transcript_cells
                         .splice(start..end, std::iter::once(consolidated.clone()));
 
@@ -569,7 +555,6 @@ impl App {
                     self.finish_required_stream_reflow(tui)?;
                 } else {
                     self.transcript_cells.push(consolidated.clone());
-                    self.record_initial_history_replay_cell(consolidated.clone());
                     if let Some(Overlay::Transcript(t)) = &mut self.overlay {
                         t.insert_cell(consolidated.clone());
                         tui.frame_requester().schedule_frame();
@@ -578,19 +563,11 @@ impl App {
                         self.sync_main_transcript_inserted_cell(consolidated.clone());
                         tui.frame_requester().schedule_frame();
                     }
-                    if self.should_render_initial_history_cell() {
+                    if self.initial_history_replay_buffer.is_none() {
                         let width = self
                             .chat_widget
                             .history_wrap_width(tui.terminal.last_known_screen_size.width);
-                        if self.initial_history_replay_buffer.is_some() {
-                            self.insert_history_cell_lines_with_initial_replay_buffer(
-                                tui,
-                                consolidated.as_ref(),
-                                width,
-                            );
-                        } else {
-                            self.insert_history_cell_lines(tui, consolidated.as_ref(), width);
-                        }
+                        self.insert_history_cell_lines(tui, consolidated.as_ref(), width);
                     }
 
                     self.maybe_finish_stream_reflow(tui)?;

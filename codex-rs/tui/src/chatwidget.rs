@@ -1396,7 +1396,13 @@ impl ChatWidget {
         self.request_redraw();
     }
 
-    fn on_committed_user_message(&mut self, items: &[UserInput], from_replay: bool) {
+    fn mark_history_turn_start(&self, turn_id: Option<&str>) {
+        self.app_event_tx.send(AppEvent::MarkHistoryTurnStart {
+            turn_id: turn_id.map(str::to_string),
+        });
+    }
+
+    fn on_committed_user_message(&mut self, items: &[UserInput], from_replay: bool, turn_id: &str) {
         let display = Self::user_message_display_from_inputs(items);
         if from_replay {
             if self.review.is_review_mode {
@@ -1411,7 +1417,7 @@ impl ChatWidget {
                     mention_bindings: mention_bindings_from_user_inputs(items, &display.message),
                     pending_pastes: Vec::new(),
                 });
-            self.on_user_message_display(display);
+            self.on_user_message_display(display, Some(turn_id));
             return;
         }
 
@@ -1426,33 +1432,37 @@ impl ChatWidget {
                 self.refresh_pending_input_preview();
                 let pending_display =
                     user_message_display_for_history(pending.user_message, &pending.history_record);
-                self.on_user_message_display(pending_display);
+                self.on_user_message_display(pending_display, Some(turn_id));
             } else if self.last_rendered_user_message_display.as_ref() != Some(&display) {
                 tracing::warn!(
                     "pending steer matched compare key but queue was empty when rendering committed user message"
                 );
-                self.on_user_message_display(display);
+                self.on_user_message_display(display, Some(turn_id));
             }
         } else if !self.review.is_review_mode
             && self.last_rendered_user_message_display.as_ref() != Some(&display)
         {
-            self.on_user_message_display(display);
+            self.on_user_message_display(display, Some(turn_id));
+        } else if !self.review.is_review_mode && display.has_visible_content() {
+            // 乐观提交已经写过用户 cell，服务端 echo 不会再次写 cell；仍要把真实 turn id
+            // 绑定到已有起点，后续同一 turn 的 steer 才不会被误切成新 turn。
+            self.mark_history_turn_start(Some(turn_id));
         }
     }
 
-    fn on_user_message_display(&mut self, display: UserMessageDisplay) {
+    fn on_user_message_display(&mut self, display: UserMessageDisplay, turn_id: Option<&str>) {
         self.last_rendered_user_message_display = Some(display.clone());
-        if !display.message.trim().is_empty()
-            || !display.text_elements.is_empty()
-            || !display.local_images.is_empty()
-            || !display.remote_image_urls.is_empty()
-        {
+        if display.has_visible_content() {
             self.add_to_history(history_cell::new_user_prompt(
                 display.message,
                 display.text_elements,
                 display.local_images,
                 display.remote_image_urls,
             ));
+            // 标记放在 cell 入队之后，确保 `add_to_history` 先发出的 active cell 不会成为
+            // 新 turn 的起点；即使服务端 turn id 尚未返回，也要先记录乐观消息的边界，避免
+            // resize 在响应等待期间回流到上一轮。App 只把该标记用于主屏回流，不改 transcript。
+            self.mark_history_turn_start(turn_id);
         }
 
         // User messages reset separator state so the next agent response doesn't add a stray break.

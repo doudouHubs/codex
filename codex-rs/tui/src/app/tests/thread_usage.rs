@@ -310,3 +310,45 @@ async fn terminal_reflow_rebases_pending_status_update_to_new_width() -> Result<
     app_server.shutdown().await?;
     Ok(())
 }
+
+#[tokio::test]
+async fn backtrack_rebuild_rebases_status_cache_after_history_tail_changes() -> Result<()> {
+    let (mut app, app_server, mut tui, _thread_id, _request_id) =
+        app_with_pending_thread_usage().await?;
+    let initial_status_lines = app
+        .last_thread_usage_status_cell
+        .as_ref()
+        .expect("initial status cache")
+        .lines
+        .clone();
+
+    app.insert_history_cell(
+        &mut tui,
+        Box::new(crate::history_cell::UserHistoryCell {
+            message: "temporary prompt".to_string(),
+            text_elements: Vec::new(),
+            local_image_paths: Vec::new(),
+            remote_image_urls: Vec::new(),
+        }),
+    );
+    app.mark_history_turn_start(Some("temporary-turn".to_string()));
+    app.transcript_cells.pop();
+
+    let resized = Size::new(/*width*/ 52, /*height*/ 24);
+    app.rebuild_transcript_after_backtrack(&mut tui, resized.into())?;
+
+    let status_lines = &app
+        .last_thread_usage_status_cell
+        .as_ref()
+        .expect("status cache should survive backtrack")
+        .lines;
+    let rendered_tail = &app
+        .last_rendered_history_tail
+        .as_ref()
+        .expect("backtrack should restore the status tail")
+        .lines;
+    assert_eq!(status_lines, rendered_tail);
+    assert_ne!(status_lines, &initial_status_lines);
+    app_server.shutdown().await?;
+    Ok(())
+}

@@ -540,6 +540,15 @@ pub(crate) struct UserMessageDisplay {
     pub(crate) text_elements: Vec<TextElement>,
 }
 
+impl UserMessageDisplay {
+    pub(crate) fn has_visible_content(&self) -> bool {
+        !self.message.trim().is_empty()
+            || !self.text_elements.is_empty()
+            || !self.local_images.is_empty()
+            || !self.remote_image_urls.is_empty()
+    }
+}
+
 pub(crate) fn mention_bindings_from_user_inputs(
     items: &[UserInput],
     message: &str,

@@ -4,8 +4,6 @@
 //! resuming/forking saved sessions, replacing ChatWidget instances, and maintaining the agent picker
 //! cache used for multi-agent navigation.
 
-use std::io;
-
 use super::agent_picker::AGENT_PICKER_VIEW_ID;
 use super::*;
 use crate::app_server_session::source_agent_path;
@@ -571,23 +569,9 @@ impl App {
             self.close_main_transcript_viewport(tui);
         }
         self.reset_transcript_state_after_clear();
+        // 只清掉尚未提交的旧批次和待清屏标记；可见终端保留到新 replay 完成，避免中间空白帧。
         tui.clear_pending_history_lines();
-        Self::clear_terminal_for_thread_switch(&mut tui.terminal)?;
-        Ok(())
-    }
-
-    pub(super) fn clear_terminal_for_thread_switch<B>(
-        terminal: &mut crate::custom_terminal::Terminal<B>,
-    ) -> Result<()>
-    where
-        B: Backend<Error = io::Error> + Write,
-    {
-        terminal.clear_scrollback_and_visible_screen_ansi()?;
-        let mut area = terminal.viewport_area;
-        if area.y > 0 {
-            area.y = 0;
-            terminal.set_viewport_area(area);
-        }
+        tui.cancel_deferred_scrollback_clear();
         Ok(())
     }
 
@@ -775,6 +759,11 @@ impl App {
         // Initial messages are for freshly attached primary threads only. Thread switches and
         // resume/fork flows pass `None` so they cannot replay old history and then auto-submit a new
         // user turn by accident.
+        if matches!(presentation, ThreadAttachPresentation::PromptEdit) {
+            // Prompt 分支可能只有空 turns，但仍然必须先丢弃旧主屏状态，否则新线程的
+            // session header 不会触发一次 replay 结束提交，旧线程内容会残留在 scrollback。
+            self.reset_for_thread_switch(tui)?;
+        }
         self.reset_thread_event_state();
         let init = self.chatwidget_init_for_forked_or_resumed_thread(
             tui,
